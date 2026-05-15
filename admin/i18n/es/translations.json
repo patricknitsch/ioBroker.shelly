@@ -18,6 +18,8 @@
     "MQTT Listen IP": "MQTT Listen IP",
     "MQTT Password": "Contraseña MQTT",
     "MQTT Server options": "Opciones del servidor MQTT",
+    "MQTT broker authentication": "Autenticación del broker MQTT",
+    "Enter credentials only if the external MQTT broker requires authentication. Leave empty for brokers without authentication.": "Introduzca credenciales solo si el broker MQTT externo requiere autenticación. Déjelo vacío para brokers sin autenticación.",
     "MQTT Username": "Nombre de usuario de MQTT",
     "MQTT and HTTP": "MQTT y HTTP",
     "MQTT broker host": "MQTT broker host",

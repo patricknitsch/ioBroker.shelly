@@ -376,7 +376,8 @@
                     "label": "MQTT broker port",
                     "help": "Port of the external MQTT broker (default: 1883)"
                 },
-                "_headerAuthenticationMqtt": {
+                "_headerAuthenticationMqttBroker": {
+                    "hidden": "data.mqttMode === 'client'",
                     "newLine": true,
                     "type": "header",
                     "size": 2,
@@ -386,6 +387,18 @@
                     "lg": 12,
                     "xl": 12,
                     "text": "MQTT Server options"
+                },
+                "_headerAuthenticationMqttClient": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "newLine": true,
+                    "type": "header",
+                    "size": 2,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "text": "MQTT broker authentication"
                 },
                 "mqttusername": {
                     "newLine": true,
@@ -410,8 +423,19 @@
                     "label": "MQTT Password",
                     "help": "Must be configured on all Shelly devices"
                 },
+                "_mqttClientAuthHint": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "newLine": true,
+                    "type": "staticText",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "text": "Enter credentials only if the external MQTT broker requires authentication. Leave empty for brokers without authentication."
+                },
                 "_mqttAuthGen2": {
-                    "hidden": "!data.mqttpassword",
+                    "hidden": "!data.mqttpassword || data.mqttMode === 'client'",
                     "newLine": true,
                     "type": "staticImage",
                     "tooltip": "Gen2",
@@ -423,7 +447,7 @@
                     "src": "img/mqttGen2.png"
                 },
                 "_mqttAuthGen1": {
-                    "hidden": "!data.mqttpassword",
+                    "hidden": "!data.mqttpassword || data.mqttMode === 'client'",
                     "type": "staticImage",
                     "tooltip": "Gen1",
                     "xs": 12,

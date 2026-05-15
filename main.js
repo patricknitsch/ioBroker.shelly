@@ -73,9 +73,15 @@ class Shelly extends utils.Adapter {
                     if (mqttMode === 'client') {
                         this.validateQosConfig();
 
-                        this.log.info(
-                            `Starting in MQTT mode (external broker client). Connecting to ${this.config.mqttClientHost}:${this.config.mqttClientPort || 1883}`,
-                        );
+                        if (this.config.mqttusername && this.config.mqttusername.length > 0) {
+                            this.log.info(
+                                `Starting in MQTT mode (external broker client). Connecting to ${this.config.mqttClientHost}:${this.config.mqttClientPort || 1883} with username "${this.config.mqttusername}"`,
+                            );
+                        } else {
+                            this.log.info(
+                                `Starting in MQTT mode (external broker client). Connecting to ${this.config.mqttClientHost}:${this.config.mqttClientPort || 1883} without authentication`,
+                            );
+                        }
 
                         this.serverMqttExternal = new protocolMqtt.MQTTServerExternal(
                             this,

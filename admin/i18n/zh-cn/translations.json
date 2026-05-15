@@ -18,6 +18,8 @@
     "MQTT Listen IP": "MQTT监听IP",
     "MQTT Password": "MQTT密码",
     "MQTT Server options": "MQTT服务器选项",
+    "MQTT broker authentication": "MQTT代理认证",
+    "Enter credentials only if the external MQTT broker requires authentication. Leave empty for brokers without authentication.": "仅当外部MQTT代理需要身份验证时才输入凭据。对于无需身份验证的代理，请留空。",
     "MQTT Username": "MQTT用户名",
     "MQTT and HTTP": "MQTT 和 HTTP",
     "MQTT broker host": "MQTT broker host",
