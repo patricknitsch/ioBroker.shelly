@@ -1,0 +1,809 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ShellyAdapter = void 0;
+const node_crypto_1 = require("node:crypto");
+const node_events_1 = require("node:events");
+const tcp_ping_1 = __importDefault(require("tcp-ping"));
+const adapter_core_1 = require("@iobroker/adapter-core");
+const credentials_1 = require("@iobroker/adapter-core/credentials");
+const package_json_1 = require("../package.json");
+const ble_decoder_1 = require("./lib/ble-decoder");
+const ble_gateway_script_1 = require("./lib/ble-gateway-script");
+const credentials_2 = require("./lib/credentials");
+const deviceManager_1 = __importDefault(require("./lib/deviceManager"));
+const objectHelper_1 = __importDefault(require("./lib/objectHelper"));
+const coap_1 = require("./lib/protocol/coap");
+const mqtt_1 = require("./lib/protocol/mqtt");
+const adapterName = package_json_1.name.split('.').pop() ?? 'shelly';
+/**
+ * A gateway which did not receive a BLE device for this time is removed from its `receivedBy` list.
+ * It must be clearly longer than the interval of the BLE advertisements, otherwise a gateway with a
+ * weak reception would disappear from the list between two messages.
+ */
+const bleReceivedByTtlMs = 60 * 60 * 1000;
+class ShellyAdapter extends adapter_core_1.Adapter {
+    serverMqtt = null;
+    serverMqttExternal = null;
+    /** Functions to stop watching the selected central credentials */
+    credentialUnsubscribers = [];
+    serverCoap = null;
+    firmwareUpdateTimeout = null;
+    onlineCheckTimeout = null;
+    deviceScanTimeout = null;
+    deviceManagement = null;
+    /** Set of device ids currently considered online. */
+    onlineDevices = {};
+    onlineCheckIsStartup = true;
+    eventEmitter = new node_events_1.EventEmitter();
+    bleDecoder = new ble_decoder_1.BleDecoder();
+    isUnloaded = false;
+    objectHelper;
+    constructor(options = {}) {
+        super({
+            ...options,
+            name: adapterName,
+        });
+        this.objectHelper = new objectHelper_1.default(this);
+        this.on('ready', this.onReady);
+        this.on('stateChange', this.onStateChange);
+        this.on('objectChange', this.onObjectChange);
+        this.on('fileChange', this.onFileChange);
+        this.on('unload', this.onUnload);
+    }
+    onReady = async () => {
+        // Initialize i18n
+        await adapter_core_1.I18n.init(__dirname, this).catch(error => this.log.error(`Cannot initialize i18n: ${error}`));
+        try {
+            this.deviceManagement = new deviceManager_1.default(this);
+            // Upgrade older config
+            if (await this.migrateConfig()) {
+                return;
+            }
+            // Take user names and passwords from the central ioBroker credentials (if selected)
+            await (0, credentials_2.applyCredentials)(this);
+            await this.watchCredentials();
+            this.eventEmitter.setMaxListeners(Infinity);
+            await this.mkdirAsync(this.namespace, 'scripts');
+            await this.subscribeForeignFiles(this.namespace, '*');
+            this.subscribeStates('*');
+            const protocol = this.config.protocol || 'coap';
+            await this.setOnlineFalse();
+            // Start online check
+            await this.onlineCheck();
+            // Start MQTT server
+            setImmediate(() => {
+                if (protocol === 'both' || protocol === 'mqtt') {
+                    this.validateQosConfig();
+                    if (this.config.mqttMode === 'client') {
+                        this.log.info(`Starting in MQTT mode (external broker). Connecting to ${this.config.mqttClientHost}:${this.config.mqttClientPort || 1883} (QoS ${this.config.qos})`);
+                        this.serverMqttExternal = new mqtt_1.MQTTServerExternal(this, this.objectHelper, this.eventEmitter);
+                        this.serverMqttExternal.listen();
+                    }
+                    else {
+                        this.log.info(`Starting in MQTT mode. Listening on ${this.config.bind}:${this.config.port} (QoS ${this.config.qos})`);
+                        if (!this.config.mqttusername || this.config.mqttusername.length === 0) {
+                            this.log.error('MQTT Username is missing!');
+                        }
+                        if (!this.config.mqttpassword || this.config.mqttpassword.length === 0) {
+                            this.log.error('MQTT Password is missing!');
+                        }
+                        this.serverMqtt = new mqtt_1.MQTTServer(this, this.objectHelper, this.eventEmitter);
+                        this.serverMqtt.listen();
+                    }
+                }
+            });
+            // Start CoAP server
+            setImmediate(() => {
+                if (protocol === 'both' || protocol === 'coap') {
+                    this.log.info(`Starting in CoAP mode. Listening on ${this.config.coapbind}:5683`);
+                    this.serverCoap = new coap_1.CoAPServer(this, this.objectHelper, this.eventEmitter);
+                    this.serverCoap.listen();
+                }
+            });
+            this.config.scanInterval = parseInt(this.config.scanInterval, 10) || 0;
+            // Periodic device scan
+            if (this.config.scanInterval > 0) {
+                const interval = Math.max(this.config.scanInterval, 60); // minimum 60 seconds
+                this.log.info(`[deviceScan] Periodic scan enabled every ${interval} seconds`);
+                this.setTimeout(() => this.deviceScan(), interval * 1000);
+            }
+            if (this.config.autoupdate) {
+                this.log.info(`[firmwareUpdate] Auto-Update enabled - devices will be updated automatically`);
+                // Wait 10 seconds for devices to connect
+                this.setTimeout(() => this.autoFirmwareUpdate(), 10 * 1000);
+            }
+            else {
+                // Wait 10 seconds for devices to connect
+                this.setTimeout(() => this.firmwareNotify(), 10 * 1000);
+            }
+        }
+        catch (err) {
+            this.log.error(`[onReady] Startup error: ${err}`);
+        }
+    };
+    /**
+     * Validates and normalizes the QoS configuration value.
+     * This is the central place where config.qos is retrieved and validated.
+     * Note: This modifies config.qos as a runtime override only; it does not persist to the configuration file.
+     */
+    validateQosConfig() {
+        // Default to 0 if qos is not set
+        if (this.config.qos === undefined || this.config.qos === null) {
+            this.config.qos = 0;
+        }
+        const qos = parseInt(String(this.config.qos), 10);
+        // Check for invalid values (< 0 or > 2)
+        if (isNaN(qos) || qos < 0 || qos > 2) {
+            this.log.error(`[MQTT] Invalid QoS value configured: ${this.config.qos}. QoS must be 0, 1, or 2. Setting QoS to 0.`);
+            this.config.qos = 0;
+            return;
+        }
+        // Log warning if QoS 2 is configured
+        if (qos === 2) {
+            this.log.warn(`[MQTT] QoS 2 is configured but not officially supported. Using QoS 2 anyway. Consider using QoS 0 or 1 instead.`);
+        }
+        // Normalize to integer type
+        this.config.qos = qos;
+    }
+    onObjectChange = (id, obj) => {
+        // Foreign objects (e.g. the watched central credentials) are no devices
+        if (!id.startsWith(`${this.namespace}.`)) {
+            return;
+        }
+        this.deviceManagement?.onObjectChange(id, obj);
+    };
+    /**
+     * Restart the instance when a selected central credential is changed or deleted, so the new
+     * user name / password is used for all connections.
+     */
+    async watchCredentials() {
+        for (const id of (0, credentials_2.getSelectedCredentialIds)(this.config)) {
+            try {
+                const unsubscribe = await (0, credentials_1.subscribeCredentials)(this, id, (changedId, credentials) => {
+                    if (this.isUnloaded) {
+                        return;
+                    }
+                    this.log.info(`[Credentials] Credential "${changedId}" was ${credentials ? 'changed' : 'deleted'} - restarting instance`);
+                    this.restart();
+                });
+                this.credentialUnsubscribers.push(unsubscribe);
+            }
+            catch (err) {
+                this.log.warn(`[Credentials] Cannot watch credential "${id}": ${err}`);
+            }
+        }
+    }
+    onStateChange = (id, state) => {
+        this.deviceManagement?.onStateChange(id, state ?? null);
+        // Warning, state can be null if it was deleted
+        if (state && !state.ack) {
+            const stateId = this.removeNamespace(id);
+            if (stateId === 'info.update') {
+                this.log.debug(`[onStateChange] "info.update" state changed - starting update on every device`);
+                this.eventEmitter.emit('onFirmwareUpdate');
+            }
+            else if (stateId === 'info.downloadScripts') {
+                this.log.debug(`[onStateChange] "info.downloadScripts" state changed - starting script download of every device`);
+                this.eventEmitter.emit('onScriptDownload');
+            }
+            else if (stateId.startsWith('ble.') && stateId.endsWith('.encryptionKey')) {
+                this.log.debug(`[onStateChange] "${stateId}" state changed - checking new encryption key`);
+                const encryptionKey = String(state.val).replaceAll('-', '').toUpperCase();
+                if (encryptionKey.length === 32) {
+                    this.setState(stateId, { val: encryptionKey, ack: true }).catch(e => this.log.warn(`Cannot set state ${stateId}: ${e}`));
+                }
+            }
+            else {
+                this.log.debug(`[onStateChange] "${id}" state changed: ${JSON.stringify(state)} - forwarding to objectHelper`);
+                this.objectHelper?.handleStateChange(id, state);
+            }
+        }
+    };
+    onFileChange = (id, fileName, size) => this.log.debug(`[onFileChange]: id: ${id}, fileName: ${fileName}, size: ${size}`);
+    /**
+     * @param callback
+     */
+    onUnload = async (callback) => {
+        this.isUnloaded = true;
+        await this.deviceManagement?.destroy();
+        if (this.onlineCheckTimeout) {
+            this.clearTimeout(this.onlineCheckTimeout);
+            this.onlineCheckTimeout = null;
+        }
+        if (this.firmwareUpdateTimeout) {
+            this.clearTimeout(this.firmwareUpdateTimeout);
+            this.firmwareUpdateTimeout = null;
+        }
+        if (this.deviceScanTimeout) {
+            this.clearTimeout(this.deviceScanTimeout);
+            this.deviceScanTimeout = null;
+        }
+        try {
+            await this.setOnlineFalse();
+        }
+        catch (e) {
+            this.log.debug(`[onUnload] Error in setOnlineFalse: ${e}`);
+        }
+        try {
+            this.log.debug('[onUnload] Closing adapter');
+            if (this.serverCoap) {
+                try {
+                    this.log.debug(`[onUnload] Stopping CoAP server`);
+                    this.serverCoap.destroy();
+                }
+                catch {
+                    // ignore
+                }
+            }
+            if (this.serverMqtt) {
+                try {
+                    this.log.debug(`[onUnload] Stopping MQTT server`);
+                    this.serverMqtt.destroy();
+                }
+                catch {
+                    // ignore
+                }
+            }
+            if (this.serverMqttExternal) {
+                try {
+                    this.log.debug(`[onUnload] Stopping external MQTT client`);
+                    this.serverMqttExternal.destroy();
+                }
+                catch {
+                    // ignore
+                }
+            }
+            for (const unsubscribe of this.credentialUnsubscribers) {
+                await unsubscribe().catch(() => {
+                    // ignore
+                });
+            }
+            this.credentialUnsubscribers = [];
+            callback();
+        }
+        catch {
+            // this.log.error('Error');
+            callback();
+        }
+    };
+    /**
+     * Online-Check via TCP ping (when using CoAP)
+     */
+    async onlineCheck() {
+        const valPort = 80;
+        if (this.onlineCheckTimeout) {
+            this.clearTimeout(this.onlineCheckTimeout);
+            this.onlineCheckTimeout = null;
+        }
+        const isStartup = this.onlineCheckIsStartup;
+        this.onlineCheckIsStartup = false;
+        try {
+            const deviceIds = await this.getAllDeviceIds();
+            for (const deviceId of deviceIds) {
+                // Skip the TCP ping for devices with an active MQTT connection - they report their online
+                // state themselves (connect / disconnect / last will). A failed ping on port 80 must not
+                // override it: devices behind a Shelly range extender are often not reachable on port 80
+                // from ioBroker, but connected via MQTT. CoAP devices still need the ping to go offline.
+                if (this.isOnline(deviceId) && this.getClientByDeviceId(deviceId)) {
+                    this.log.silly(`[onlineCheck] Skipping ${deviceId} - connected via MQTT`);
+                    continue;
+                }
+                const stateHostName = await this.getStateAsync(`${deviceId}.hostname`);
+                const valHostname = stateHostName?.val;
+                if (valHostname) {
+                    this.log.debug(`[onlineCheck] Checking ${deviceId} on ${valHostname}:${valPort}`);
+                    tcp_ping_1.default.probe(String(valHostname), valPort, (_error, isAlive) => {
+                        if (isStartup && isAlive) {
+                            // On startup, devices connect via MQTT/CoAP and set their own online status.
+                            // Marking devices online here before the protocol layer has initialized (e.g. IP not yet set)
+                            // can cause premature actions such as firmware update attempts with an unknown IP address.
+                            this.log.debug(`[onlineCheck] Skipping online status update for ${deviceId} during startup`);
+                            return;
+                        }
+                        void this.deviceStatusUpdate(deviceId, isAlive);
+                    });
+                }
+            }
+        }
+        catch (e) {
+            this.log.error(e.toString());
+        }
+        this.onlineCheckTimeout = this.setTimeout(async () => {
+            this.onlineCheckTimeout = null;
+            await this.onlineCheck();
+        }, 60 * 1000); // Restart online check in 60 seconds
+    }
+    async deviceStatusUpdate(deviceId, status) {
+        if (this.isUnloaded) {
+            return;
+        }
+        if (!deviceId) {
+            return;
+        }
+        this.log.debug(`[deviceStatusUpdate] ${deviceId}: ${status}`);
+        // Check if device object exists
+        const knownDeviceIds = await this.getAllDeviceIds();
+        if (!knownDeviceIds.includes(deviceId)) {
+            this.log.silly(`[deviceStatusUpdate] ${deviceId} is not in list of known devices: ${JSON.stringify(knownDeviceIds)}`);
+            return;
+        }
+        // Update online status
+        const idOnline = `${deviceId}.online`;
+        const onlineState = await this.getStateAsync(idOnline);
+        if (onlineState) {
+            // Compare to previous value
+            const prevValue = onlineState.val ? onlineState.val === 'true' || onlineState.val === true : false;
+            if (prevValue != status) {
+                await this.setState(idOnline, { val: status, ack: true });
+            }
+        }
+        // Update connection state
+        const oldOnlineDeviceCount = Object.keys(this.onlineDevices).length;
+        if (status) {
+            this.onlineDevices[deviceId] = true;
+        }
+        else if (Object.prototype.hasOwnProperty.call(this.onlineDevices, deviceId)) {
+            delete this.onlineDevices[deviceId];
+        }
+        const newOnlineDeviceCount = Object.keys(this.onlineDevices).length;
+        // Check online devices
+        if (oldOnlineDeviceCount !== newOnlineDeviceCount) {
+            this.log.debug(`[deviceStatusUpdate] Online devices: ${JSON.stringify(Object.keys(this.onlineDevices))}`);
+            if (newOnlineDeviceCount > 0) {
+                await this.setState('info.connection', { val: true, ack: true });
+            }
+            else {
+                await this.setState('info.connection', { val: false, ack: true });
+            }
+        }
+    }
+    isOnline(deviceId) {
+        return Object.prototype.hasOwnProperty.call(this.onlineDevices, deviceId ?? '');
+    }
+    async getAllDeviceIds() {
+        const devices = await this.getDevicesAsync();
+        return devices.map(device => this.removeNamespace(device._id));
+    }
+    async setOnlineFalse() {
+        const deviceIds = await this.getAllDeviceIds();
+        for (const deviceId of deviceIds) {
+            const idOnline = `${deviceId}.online`;
+            const onlineState = await this.getStateAsync(idOnline);
+            if (onlineState) {
+                await this.setState(idOnline, { val: false, ack: true });
+            }
+            await this.extendObject(deviceId, {
+                common: {
+                    color: null, // Remove color from previous versions
+                },
+            });
+        }
+        this.onlineDevices = {};
+        await this.setState('info.connection', { val: false, ack: true });
+    }
+    autoFirmwareUpdate() {
+        if (this.isUnloaded) {
+            return;
+        }
+        if (this.config.autoupdate) {
+            this.log.debug(`[firmwareUpdate] Starting update on every device`);
+            this.eventEmitter.emit('onFirmwareUpdate');
+            this.firmwareUpdateTimeout = this.setTimeout(() => {
+                this.firmwareUpdateTimeout = null;
+                this.autoFirmwareUpdate();
+            }, 15 * 60 * 1000); // Restart firmware update in 15 minutes
+        }
+    }
+    async firmwareNotify() {
+        if (this.isUnloaded) {
+            return;
+        }
+        if (!this.config.autoupdate) {
+            this.log.debug(`[firmwareNotify] Starting firmware check on every device`);
+            const availableUpdates = [];
+            try {
+                const deviceIds = await this.getAllDeviceIds();
+                for (const deviceId of deviceIds) {
+                    const stateFirmware = await this.getStateAsync(`${deviceId}.firmware`);
+                    const hasNewFirmware = stateFirmware && stateFirmware.ack ? stateFirmware.val : false;
+                    if (hasNewFirmware) {
+                        const deviceObj = await this.getObjectAsync(deviceId);
+                        const deviceName = typeof deviceObj?.common.name === 'string'
+                            ? deviceObj.common.name
+                            : (deviceObj?.common.name?.en ?? deviceId);
+                        availableUpdates.push(`${deviceName} (${deviceId})`);
+                    }
+                }
+            }
+            catch (e) {
+                this.log.error(e.toString());
+            }
+            if (availableUpdates.length > 0) {
+                await this.registerNotification('shelly', 'deviceUpdates', availableUpdates.join('\n'));
+            }
+            this.firmwareUpdateTimeout = this.setTimeout(async () => {
+                this.firmwareUpdateTimeout = null;
+                await this.firmwareNotify();
+            }, 15 * 60 * 1000); // Restart firmware check in 15 minutes
+        }
+    }
+    async deviceScan() {
+        if (this.isUnloaded) {
+            return;
+        }
+        try {
+            if (this.deviceManagement) {
+                const newDevices = await this.deviceManagement.scanForNewDevices();
+                if (newDevices.length > 0) {
+                    const deviceList = newDevices.map(d => `${d.name} (${d.ip})`).join('\n');
+                    this.log.info(`[deviceScan] Found ${newDevices.length} new device(s): ${deviceList.replace(/\n/g, ', ')}`);
+                    await this.registerNotification('shelly', 'newDevices', deviceList);
+                }
+                else {
+                    this.log.debug('[deviceScan] No new devices found');
+                }
+            }
+        }
+        catch (err) {
+            this.log.error(`[deviceScan] Error: ${err}`);
+        }
+        // Schedule next scan
+        if (!this.isUnloaded && this.config.scanInterval > 0) {
+            const interval = Math.max(this.config.scanInterval, 60);
+            this.deviceScanTimeout = this.setTimeout(async () => {
+                this.deviceScanTimeout = null;
+                await this.deviceScan();
+            }, interval * 1000);
+        }
+    }
+    convertFromHex(hexStr) {
+        const bytes = [];
+        for (let i = 0; i < hexStr.length; i += 2) {
+            const byte = parseInt(hexStr.slice(i, i + 2), 16);
+            bytes.push(byte);
+        }
+        return bytes;
+    }
+    classifyBleDevice(dataKeys) {
+        if (dataKeys.includes('precipitation') || dataKeys.includes('gust_speed') || dataKeys.includes('rain_status')) {
+            return { model: 'BLU Outdoor Weather Station', icon: 'ble-ht' };
+        }
+        if (dataKeys.includes('motion')) {
+            return { model: 'BLU Motion Sensor', icon: 'ble-motion' };
+        }
+        if (dataKeys.includes('window') || dataKeys.includes('rotation')) {
+            return { model: 'BLU Door/Window Sensor', icon: 'ble-door-window' };
+        }
+        if (dataKeys.includes('humidity') && dataKeys.includes('temperature')) {
+            return { model: 'BLU H&T Sensor', icon: 'ble-ht' };
+        }
+        if (dataKeys.includes('button_4')) {
+            return { model: 'BLU Button Tough 4', icon: 'ble-button4' };
+        }
+        if (dataKeys.includes('button_1')) {
+            return { model: 'BLU Button 1', icon: 'ble-button1' };
+        }
+        return { model: 'Bluetooth', icon: 'ble-button1' };
+    }
+    async processBleMessage(val) {
+        const valTyped = val;
+        if (valTyped?.scriptVersion && valTyped.src && valTyped.payload) {
+            this.log.debug(`[processBleMessage] Received payload ${JSON.stringify(valTyped.payload)} from ${valTyped.src}`);
+            // Only major/minor is compared - a patch release of the script stays compatible
+            const expectedScriptVersion = ble_gateway_script_1.bleGatewayScriptVersion.split('.').slice(0, 2).join('.');
+            if (!String(valTyped.scriptVersion).startsWith(expectedScriptVersion)) {
+                this.log.warn(`[BLE] ${valTyped.srcBle.mac} (via ${valTyped.src}): Script version ${valTyped.scriptVersion} is not supported (expected ${expectedScriptVersion}), see documentation for latest version`);
+            }
+            await this.extendObject('ble', {
+                type: 'folder',
+                common: {
+                    name: 'Bluetooth',
+                    icon: 'icons/ble.svg',
+                },
+                native: {},
+            });
+            await this.extendObject(`ble.${valTyped.srcBle.mac}`, {
+                type: 'device',
+                common: {
+                    name: valTyped.srcBle.mac,
+                },
+                native: {},
+            }, { preserve: { common: ['name', 'icon'] } });
+            await this.delObjectAsync(`ble.${valTyped.srcBle.mac}.rssi`); // moved to receivedBy
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.pid`, {
+                type: 'state',
+                common: {
+                    name: adapter_core_1.I18n.getTranslatedObject('Packet ID') /*{
+                        en: 'Packet ID',
+                        de: 'Paket-ID',
+                        ru: 'ID пакета',
+                        pt: 'ID da embalagem',
+                        nl: 'Pakket-ID',
+                        fr: 'ID du paquet',
+                        it: 'ID pacchetto',
+                        es: 'ID de paquete',
+                        pl: 'Identyfikator opakowania',
+                        uk: 'Код товару',
+                        'zh-cn': '软件包标识',
+                    },*/,
+                    type: 'number',
+                    role: 'value',
+                    read: true,
+                    write: false,
+                },
+                native: {},
+            });
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.receivedBy`, {
+                type: 'state',
+                common: {
+                    name: adapter_core_1.I18n.getTranslatedObject('Received by devices'),
+                    type: 'string',
+                    role: 'json',
+                    read: true,
+                    write: false,
+                    def: '{}',
+                },
+                native: {},
+            });
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.encrypted`, {
+                type: 'state',
+                common: {
+                    name: adapter_core_1.I18n.getTranslatedObject('Encrypted'),
+                    type: 'boolean',
+                    role: 'value',
+                    read: true,
+                    write: false,
+                    def: false,
+                },
+                native: {},
+            });
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.encryptionKey`, {
+                type: 'state',
+                common: {
+                    name: adapter_core_1.I18n.getTranslatedObject('Encryption key'),
+                    type: 'string',
+                    role: 'value',
+                    read: true,
+                    write: true,
+                    def: '00000000-0000-0000-0000-000000000000',
+                },
+                native: {},
+            });
+            const rawData = this.convertFromHex(valTyped.payload); // convert hex to bytes
+            let unpackedData = this.bleDecoder.unpack(Buffer.from(rawData));
+            if (unpackedData !== null) {
+                this.log.debug(`[processBleMessage] Received unpacked payload ${JSON.stringify(unpackedData)} from ${valTyped.src}`);
+                await this.setState(`ble.${valTyped.srcBle.mac}.encrypted`, {
+                    val: unpackedData.encryption,
+                    ack: true,
+                });
+                if (unpackedData.encryption) {
+                    const encryptionKeyState = await this.getStateAsync(`ble.${valTyped.srcBle.mac}.encryptionKey`);
+                    const encryptionKeyHex = encryptionKeyState
+                        ? String(encryptionKeyState.val)
+                        : '00000000-0000-0000-0000-000000000000';
+                    const encryptionKey = Buffer.from(encryptionKeyHex.replaceAll('-', ''), 'hex');
+                    const macBuffer = Buffer.from(valTyped.srcBle.mac.replaceAll(':', ''), 'hex');
+                    const dataPrefix = Buffer.concat([Buffer.from('d2fc', 'hex'), Buffer.from(rawData)]);
+                    const uuid = Buffer.from(dataPrefix.slice(0, 2));
+                    const deviceInfo = Buffer.from([dataPrefix[2]]);
+                    const ciphertext = Buffer.from(dataPrefix.slice(3, -8));
+                    const counter = Buffer.from(dataPrefix.slice(-8, -4));
+                    const mic = Buffer.from(dataPrefix.slice(-4));
+                    const nonce = Buffer.concat([macBuffer, uuid, deviceInfo, counter]);
+                    try {
+                        const decipher = (0, node_crypto_1.createDecipheriv)('aes-128-ccm', encryptionKey, nonce, {
+                            authTagLength: 4,
+                        });
+                        decipher.setAuthTag(mic);
+                        const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+                        unpackedData = this.bleDecoder.unpack(decrypted, true);
+                    }
+                    catch (err) {
+                        this.log.error(`[processBleMessage] unable to process encrypted payload by ${valTyped.src}: ${err}`);
+                    }
+                }
+                if (unpackedData !== null) {
+                    this.log.debug(`[processBleMessage] Processing (decrypted) payload ${JSON.stringify(unpackedData)} from ${valTyped.src}`);
+                    const typesList = {
+                        battery: { type: 'number', unit: '%' },
+                        battery_low: { type: 'number' },
+                        button: {
+                            type: 'number',
+                            states: {
+                                0: 'Nothing',
+                                1: 'Single',
+                                2: 'Double',
+                                3: 'Triple',
+                                4: 'Long',
+                                128: 'Hold',
+                                254: 'Hold',
+                            },
+                        },
+                        dewpoint: { type: 'number', unit: '°C' },
+                        direction: { type: 'number', unit: '°' },
+                        distance_m: { type: 'number', unit: 'm' },
+                        distance_mm: { type: 'number', unit: 'mm' },
+                        gust_speed: { type: 'number', unit: 'm/s' },
+                        humidity: { type: 'number', unit: '%' },
+                        illuminance: { type: 'number' },
+                        light: { type: 'number', states: { 0: 'Dark', 1: 'Twilight', 2: 'Light' } },
+                        moisture: { type: 'number', unit: '%' },
+                        motion: { type: 'number', states: { 0: 'Clear', 1: 'Detected' } },
+                        precipitation: { type: 'number', unit: 'mm' },
+                        pressure: { type: 'number', unit: 'hPa' },
+                        rain_status: { type: 'number', states: { 0: 'Not raining', 1: 'Raining' } },
+                        rotation: { type: 'number' },
+                        speed: { type: 'number', unit: 'm/s' },
+                        temperature: { type: 'number', unit: '°C' },
+                        uv_index: { type: 'number' },
+                        voltage: { type: 'number', unit: 'V' },
+                        window: { type: 'number', states: { 0: 'Closed', 1: 'Open' } },
+                    };
+                    const pidState = await this.getStateAsync(`ble.${valTyped.srcBle.mac}.pid`);
+                    const pidOld = pidState?.val ? pidState.val : -1;
+                    const pidNew = unpackedData.pid;
+                    // The gateway list is updated for every message - also for a message which has
+                    // already been received by another Shelly - so that it contains all gateways
+                    // which currently receive this device and not only the receivers of one packet.
+                    await this.updateBleReceivedBy(valTyped.srcBle.mac, valTyped.src, valTyped.srcBle.rssi, valTyped.scriptVersion);
+                    // Check if same message has been received by other Shellys
+                    if (pidOld !== pidNew) {
+                        await this.setState(`ble.${valTyped.srcBle.mac}.pid`, {
+                            val: pidNew,
+                            ack: true,
+                            c: valTyped.src,
+                        });
+                        for (const [key, value] of Object.entries(unpackedData)) {
+                            const typeListKey = key.includes('button_') ? 'button' : key;
+                            if (Object.keys(typesList).includes(typeListKey)) {
+                                const stateType = typesList[typeListKey].type;
+                                let stateValue;
+                                if (stateType === 'number') {
+                                    stateValue = value;
+                                }
+                                else if (stateType === 'boolean') {
+                                    stateValue = !!value;
+                                }
+                                await this.extendObject(`ble.${valTyped.srcBle.mac}.${key}`, {
+                                    type: 'state',
+                                    common: {
+                                        name: key,
+                                        type: stateType,
+                                        role: 'value',
+                                        read: true,
+                                        write: false,
+                                        unit: typesList[typeListKey]?.unit,
+                                        states: typesList[typeListKey]?.states,
+                                    },
+                                    native: {},
+                                });
+                                if (stateValue != undefined) {
+                                    await this.setState(`ble.${valTyped.srcBle.mac}.${key}`, {
+                                        val: stateValue,
+                                        ack: true,
+                                        c: valTyped.src,
+                                    });
+                                }
+                            }
+                            else {
+                                this.log.debug(`[processBleMessage] skipping unknown attribute ${key} from ${valTyped.src}`);
+                            }
+                        }
+                        // Classify BLE device and set name/icon if still default
+                        const bleDeviceObj = await this.getObjectAsync(`ble.${valTyped.srcBle.mac}`);
+                        if (bleDeviceObj) {
+                            const dataKeys = Object.keys(unpackedData);
+                            const bleType = this.classifyBleDevice(dataKeys);
+                            const updates = {};
+                            if (bleDeviceObj.common.name === valTyped.srcBle.mac) {
+                                updates.name = bleType.model;
+                            }
+                            if (!bleDeviceObj.common.icon || String(bleDeviceObj.common.icon).startsWith('data:')) {
+                                updates.icon = `icons/${bleType.icon}.png`;
+                            }
+                            if (Object.keys(updates).length > 0) {
+                                await this.extendObject(`ble.${valTyped.srcBle.mac}`, { common: updates });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /**
+     * Add a gateway to the `receivedBy` list of a BLE device. Gateways which did not receive the
+     * device within `bleReceivedByTtlMs` are removed from the list, so a gateway which was switched
+     * off or moved away does not stay in the list forever.
+     *
+     * @param mac MAC address of the BLE device
+     * @param src Shelly device id of the gateway which received the message
+     * @param rssi signal strength reported by the gateway
+     * @param scriptVersion version of the BLE gateway script running on the gateway
+     */
+    async updateBleReceivedBy(mac, src, rssi, scriptVersion) {
+        try {
+            const receivedByState = await this.getStateAsync(`ble.${mac}.receivedBy`);
+            let deviceList = {};
+            if (typeof receivedByState?.val === 'string' && receivedByState.val) {
+                deviceList = JSON.parse(receivedByState.val);
+            }
+            const now = Date.now();
+            for (const [device, info] of Object.entries(deviceList)) {
+                if (typeof info?.ts !== 'number' || now - info.ts > bleReceivedByTtlMs) {
+                    delete deviceList[device];
+                }
+            }
+            deviceList[src] = { rssi, scriptVersion, ts: now };
+            await this.setState(`ble.${mac}.receivedBy`, {
+                val: JSON.stringify(deviceList, null, 2),
+                ack: true,
+            });
+        }
+        catch (err) {
+            this.log.error(`[processBleMessage] Unable to extend device list (receivedBy) of ${mac}: ${err}`);
+        }
+    }
+    /**
+     * Connected MQTT client of a device, used by the device manager to talk to the device directly.
+     * Only available for the MQTT protocol - Gen2+ devices are not supported by CoAP.
+     *
+     * @param deviceId ioBroker device id, e.g. `SNSN-0013A#a1b2c3#1`
+     */
+    getClientByDeviceId(deviceId) {
+        return this.serverMqtt?.getClientByDeviceId(deviceId) ?? this.serverMqttExternal?.getClientByDeviceId(deviceId);
+    }
+    removeNamespace(id) {
+        const re = new RegExp(`${this.namespace}*\\.`, 'g');
+        return id.replace(re, '');
+    }
+    async migrateConfig() {
+        const native = {};
+        // Read legacy config keys that are no longer part of the typed AdapterConfig.
+        const legacy = this.config;
+        if (legacy?.http_username) {
+            native.httpusername = legacy.http_username;
+            native.http_username = '';
+        }
+        if (legacy?.http_password) {
+            native.httppassword = legacy.http_password;
+            native.http_password = '';
+        }
+        if (legacy?.user) {
+            native.mqttusername = legacy.user;
+            native.user = '';
+        }
+        if (legacy?.password) {
+            native.mqttpassword = legacy.password;
+            native.password = '';
+        }
+        if (legacy?.keys) {
+            native.blacklist = legacy.keys.map(b => {
+                return { id: b.blacklist };
+            });
+            native.keys = null;
+        }
+        if (this.config) {
+            this.config.polltime = parseInt(String(this.config.polltime), 10);
+        }
+        if (Object.keys(native).length) {
+            this.log.info('Migrate some data from old Shelly Adapter version. Restarting Shelly Adapter now!');
+            await this.extendForeignObjectAsync(`system.adapter.${this.namespace}`, { native });
+            return true;
+        }
+        return false;
+    }
+}
+exports.ShellyAdapter = ShellyAdapter;
+if (module.parent) {
+    // Export the constructor in compact mode
+    module.exports = (options) => new ShellyAdapter(options);
+}
+else {
+    // otherwise start the instance directly
+    new ShellyAdapter();
+}
+//# sourceMappingURL=main.js.map
