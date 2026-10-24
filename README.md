@@ -240,6 +240,9 @@ See [documentation (en)](https://github.com/iobroker-community-adapters/ioBroker
 -->
 ### **WORK IN PROGRESS**
 - (GermanBluefox) Updated packages
+- (patricknitsch) Added support for an external MQTT broker (client mode): instead of starting the internal broker, the adapter can connect to an existing MQTT broker (e.g. Mosquitto). Select the new option "MQTT mode" in the MQTT settings. Devices with the default topic prefix and with a folder in front of it (e.g. `shelly/<prefix>`) are supported.
+- (patricknitsch) Improved support for devices behind a Shelly range extender: RSSI and uptime are also updated via MQTT, the IP address is taken from the network status, a reconnect does not set the device offline anymore and the TCP online check is skipped for devices connected via MQTT.
+- (patricknitsch) **ADAPTER MEETS ioBroker SECRETS**: The central credentials of the Admin settings (Admin 8 and newer) can now be used for the MQTT and HTTP user credentials (credential "Login & password").
 
 ### 12.1.0-alpha.1 (2026-10-14)
 

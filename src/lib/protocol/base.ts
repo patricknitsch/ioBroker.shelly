@@ -1480,11 +1480,16 @@ export class BaseClient implements ShellyClient {
         }
     }
 
-    destroy(): void {
+    /**
+     * @param setOffline - false if the device is still online (e.g. a newer connection of the same device took over)
+     */
+    destroy(setOffline = true): void {
         this.adapter.log.debug(`[BaseClient] Destroying ${this.getLogInfo()}`);
-        this.adapter
-            .deviceStatusUpdate(this.getDeviceId(), false) // Device offline
-            .catch((e: unknown) => this.adapter.log.error(`[BaseClient] deviceStatusUpdate failed: ${String(e)}`));
+        if (setOffline) {
+            this.adapter
+                .deviceStatusUpdate(this.getDeviceId(), false) // Device offline
+                .catch((e: unknown) => this.adapter.log.error(`[BaseClient] deviceStatusUpdate failed: ${String(e)}`));
+        }
 
         if (this.httpIoBrokerStateTimeout) {
             clearTimeout(this.httpIoBrokerStateTimeout);

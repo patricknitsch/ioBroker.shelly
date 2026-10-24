@@ -132,6 +132,7 @@
     "Event": "Zdarzenie",
     "Event count": "Liczba zdarzeń",
     "External Humidity": "Wilgotność zewnętrzna",
+    "External MQTT broker host is not configured": "Host zewnętrznego brokera MQTT nie jest skonfigurowany",
     "External Power": "Zasilanie zewnętrzne",
     "External power supply": "Zasilanie zewnętrzne",
     "External sensor enabled": "Czujnik zewnętrzny włączony",
