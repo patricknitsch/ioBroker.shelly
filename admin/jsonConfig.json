@@ -92,6 +92,17 @@
                     "xl": 12,
                     "text": "User credentials for restricted login"
                 },
+                "httpCredential": {
+                    "newLine": true,
+                    "type": "credential",
+                    "label": "Credential (Admin settings)",
+                    "help": "credentialHelp",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4
+                },
                 "httpusername": {
                     "newLine": true,
                     "type": "text",
@@ -101,7 +112,8 @@
                     "lg": 4,
                     "xl": 4,
                     "label": "HTTP Username",
-                    "help": "Will be used to authenticate against generation 1 devices"
+                    "help": "Will be used to authenticate against generation 1 devices",
+                    "disabled": "!!data.httpCredential"
                 },
                 "httppassword": {
                     "type": "password",
@@ -113,7 +125,8 @@
                     "lg": 4,
                     "xl": 4,
                     "label": "HTTP Password",
-                    "help": "You have to configure the same password on all devices"
+                    "help": "You have to configure the same password on all devices",
+                    "disabled": "!!data.httpCredential"
                 },
                 "_documentationLinkRestrictedLogin": {
                     "type": "staticLink",
@@ -267,6 +280,27 @@
             "label": "MQTT settings",
             "icon": "data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4NCjxzdmcgdmlld0JveD0iMCAwIDQ0OCA1MTIiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+DQogICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMi4wNDY4NDYsIDAsIDAsIDIuMDQ2ODQ2LCAtNzkuMTM2MzIyLCAtMzcuNTUzNzMpIiBzdHlsZT0iIj4NCiAgICAgICAgPHBhdGggZD0iTTQ2LDY0LjJ2MzFjMC4yLDAsMC40LDAsMC42LDBjODQuNCwwLDE1My4yLDY4LDE1My45LDE1MS44aDMwLjFDMjI5LjgsMTQ2LjMsMTQ3LjQsNjQuNSw0Niw2NC4yeiIgZmlsbD0iI0ZGRkZGRiIgc3R5bGU9IiIvPg0KICAgICAgICA8cGF0aCBmaWxsPSIjRkZGRkZGIiBkPSJNNDYsMTI4LjJ2MzFjMC4yLDAsMC40LDAsMC42LDBjNDguOSwwLDg4LjgsMzkuMyw4OS41LDg3LjhoMzAuMUMxNjUuNSwxODEuNiwxMTEuOSwxMjguNSw0NiwxMjguMnoiIHN0eWxlPSIiLz4NCiAgICAgICAgPHBhdGggZmlsbD0iI0ZGRkZGRiIgZD0iTTI0OC44LDE2Ni44di02Mi41Yy03LjctMTAuNS0xNy4yLTIyLjUtMjYuNy0zMS44Yy0xMC42LTEwLjUtMjMtMjAtMzUtMjguM2gtNjYuNCBDMTc4LjksNjUuMSwyMjUuNiwxMTAsMjQ4LjgsMTY2Ljh6IiBzdHlsZT0iIi8+DQogICAgICAgIDxwYXRoIGQ9Ik00Ni41LDE1OS4yYy0wLjIsMC0wLjQsMC0wLjYsMHY3Ny42YzAsNS42LDQuNiwxMC4yLDEwLjIsMTAuMkgxMzZDMTM1LjMsMTk4LjUsOTUuNSwxNTkuMiw0Ni41LDE1OS4yeiIgc3R5bGU9IiIvPg0KICAgICAgICA8cGF0aCBkPSJNNDYuNSw5NS4yYy0wLjIsMC0wLjQsMC0wLjYsMHYzM2M2NS45LDAuMywxMTkuNSw1My4zLDEyMC4yLDExOC44aDM0LjJDMTk5LjcsMTYzLjIsMTMxLDk1LjIsNDYuNSw5NS4yeiIgc3R5bGU9IiIvPg0KICAgICAgICA8cGF0aCBkPSJNMjQ4LjgsMjM2Ljl2LTcwLjFjLTIzLjItNTYuOC02OS45LTEwMS43LTEyOC0xMjIuNkg1Ni4xYy01LjYsMC0xMC4yLDQuNi0xMC4yLDEwLjJ2OS45IGMxMDEuNCwwLjMsMTgzLjksODIsMTg0LjUsMTgyLjhoOC4yQzI0NC4zLDI0NywyNDguOCwyNDIuNSwyNDguOCwyMzYuOXoiIHN0eWxlPSIiLz4NCiAgICAgICAgPHBhdGggZD0iTTIyMi4xLDcyLjVjOS40LDkuNCwxOSwyMS4zLDI2LjcsMzEuOHYtNTBjMC01LjYtNC41LTEwLjEtMTAuMS0xMC4xaC01MS41QzE5OS4yLDUyLjUsMjExLjYsNjIsMjIyLjEsNzIuNSB6IiBzdHlsZT0iIi8+DQogICAgPC9nPg0KPC9zdmc+DQo=",
             "items": {
+                "mqttMode": {
+                    "newLine": true,
+                    "type": "select",
+                    "options": [
+                        {
+                            "label": "MQTT broker (internal)",
+                            "value": "broker"
+                        },
+                        {
+                            "label": "MQTT client (external broker)",
+                            "value": "client"
+                        }
+                    ],
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "label": "MQTT mode",
+                    "help": "mqttModeHelp"
+                },
                 "bind": {
                     "newLine": true,
                     "type": "ip",
@@ -276,7 +310,8 @@
                     "md": 4,
                     "lg": 4,
                     "xl": 4,
-                    "label": "MQTT Listen IP"
+                    "label": "MQTT Listen IP",
+                    "hidden": "data.mqttMode === 'client'"
                 },
                 "port": {
                     "type": "number",
@@ -287,7 +322,33 @@
                     "md": 4,
                     "lg": 2,
                     "xl": 2,
-                    "label": "Port"
+                    "label": "Port",
+                    "hidden": "data.mqttMode === 'client'"
+                },
+                "mqttClientHost": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "newLine": true,
+                    "type": "text",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "label": "MQTT broker host",
+                    "help": "mqttClientHostHelp"
+                },
+                "mqttClientPort": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "type": "number",
+                    "min": 1,
+                    "max": 65535,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 2,
+                    "xl": 2,
+                    "label": "MQTT broker port",
+                    "help": "mqttClientPortHelp"
                 },
                 "_headerAuthenticationMqtt": {
                     "newLine": true,
@@ -298,7 +359,42 @@
                     "md": 12,
                     "lg": 12,
                     "xl": 12,
-                    "text": "MQTT Server options"
+                    "text": "MQTT Server options",
+                    "hidden": "data.mqttMode === 'client'"
+                },
+                "_headerAuthenticationMqttClient": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "newLine": true,
+                    "type": "header",
+                    "size": 2,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "text": "MQTT broker options"
+                },
+                "_mqttClientCredentialsInfo": {
+                    "hidden": "data.mqttMode !== 'client'",
+                    "newLine": true,
+                    "type": "staticText",
+                    "text": "mqttClientCredentialsHelp",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12
+                },
+                "mqttCredential": {
+                    "newLine": true,
+                    "type": "credential",
+                    "label": "Credential (Admin settings)",
+                    "help": "credentialHelp",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4
                 },
                 "mqttusername": {
                     "newLine": true,
@@ -309,7 +405,8 @@
                     "lg": 4,
                     "xl": 4,
                     "label": "MQTT Username",
-                    "help": "Must be configured on all Shelly devices"
+                    "help": "Must be configured on all Shelly devices",
+                    "disabled": "!!data.mqttCredential"
                 },
                 "mqttpassword": {
                     "type": "password",
@@ -321,7 +418,8 @@
                     "lg": 4,
                     "xl": 4,
                     "label": "MQTT Password",
-                    "help": "Must be configured on all Shelly devices"
+                    "help": "Must be configured on all Shelly devices",
+                    "disabled": "!!data.mqttCredential"
                 },
                 "_documentationLinkRestrictedLogin": {
                     "type": "staticLink",
@@ -349,7 +447,7 @@
                     "xl": 4
                 },
                 "_mqttAuthGen2": {
-                    "hidden": "!data.mqttpassword",
+                    "hidden": "!data.mqttpassword || data.mqttMode === 'client'",
                     "newLine": true,
                     "type": "staticImage",
                     "tooltip": "Gen2",
@@ -361,7 +459,7 @@
                     "src": "img/mqttGen2.png"
                 },
                 "_mqttAuthGen1": {
-                    "hidden": "!data.mqttpassword",
+                    "hidden": "!data.mqttpassword || data.mqttMode === 'client'",
                     "type": "staticImage",
                     "tooltip": "Gen1",
                     "xs": 12,

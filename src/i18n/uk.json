@@ -132,6 +132,7 @@
     "Event": "Подія",
     "Event count": "Кількість подій",
     "External Humidity": "Зовнішня вологість",
+    "External MQTT broker host is not configured": "Хост зовнішнього MQTT-брокера не налаштовано",
     "External Power": "Зовнішнє живлення",
     "External power supply": "Зовнішнє джерело живлення",
     "External sensor enabled": "Зовнішній датчик увімкнено",

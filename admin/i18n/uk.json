@@ -7,6 +7,7 @@
     "CoAP and HTTP": "CoAP і HTTP",
     "CoAP ist supported by Gen1 devices, MQTT is supported by all devices (Gen1 and Gen2)": "CoAP підтримується пристроями Gen1, MQTT підтримується всіма пристроями (Gen1 і Gen2)",
     "CoAP settings": "Налаштування CoAP",
+    "Credential (Admin settings)": "Облікові дані (налаштування Admin)",
     "Custom options": "Спеціальні параметри",
     "Debugging (expert options)": "Налагодження (експертні параметри)",
     "Default QoS": "QoS за замовчуванням",
@@ -26,6 +27,12 @@
     "MQTT Server options": "Параметри сервера MQTT",
     "MQTT Username": "Ім'я користувача MQTT",
     "MQTT and HTTP": "MQTT і HTTP",
+    "MQTT broker (internal)": "MQTT-брокер (внутрішній)",
+    "MQTT broker host": "Хост MQTT-брокера",
+    "MQTT broker options": "Параметри MQTT-брокера",
+    "MQTT broker port": "Порт MQTT-брокера",
+    "MQTT client (external broker)": "MQTT-клієнт (зовнішній брокер)",
+    "MQTT mode": "Режим MQTT",
     "MQTT settings": "Налаштування MQTT",
     "Must be configured on all Shelly devices": "Необхідно налаштувати на всіх пристроях Shelly",
     "Periodically scan network for new Shelly devices via mDNS": "Періодично скануйте мережу на наявність нових пристроїв Shelly через mDNS",
@@ -38,5 +45,10 @@
     "Update objects even if there is no value change": "Оновити об’єкти, навіть якщо значення не змінено",
     "User credentials for restricted login": "Облікові дані користувача для обмеженого входу",
     "Will be used to authenticate against generation 1 devices": "Використовуватиметься для автентифікації пристроїв першого покоління",
-    "You have to configure the same password on all devices": "Ви повинні налаштувати однаковий пароль на всіх пристроях"
+    "You have to configure the same password on all devices": "Ви повинні налаштувати однаковий пароль на всіх пристроях",
+    "credentialHelp": "Немає = використовувати ім’я користувача та пароль нижче. Інакше — облікові дані типу «Логін і пароль» з налаштувань Admin (Admin 8 і новіше).",
+    "mqttClientCredentialsHelp": "У режимі клієнта ім’я користувача та пароль використовуються для входу на зовнішній брокер (необов’язково, залежно від брокера).",
+    "mqttClientHostHelp": "IP-адреса або ім’я хоста зовнішнього брокера, наприклад 192.168.1.10 (або URL на зразок mqtts://broker.local:8883)",
+    "mqttClientPortHelp": "За замовчуванням: 1883",
+    "mqttModeHelp": "Запустити внутрішній MQTT-брокер або підключитися до наявного зовнішнього MQTT-брокера"
 }

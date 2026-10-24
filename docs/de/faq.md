@@ -32,7 +32,7 @@ Entweder ist das Gerät noch nicht in der Liste der unterstützen Geräte des Ad
 
 ## Ist es möglich, den Shelly-Adapter mit einem bestehenden MQTT-Broker zu verbinden?
 
-Es ist nicht möglich, den Shelly-Adapter mit einem existierenden MQTT-Broker im Netzwerk zu verbinden. Der Shelly-Adapter startet einen eigenen MQTT-Broker intern, welcher auf dem Port ``1882`` gestartet wird, um einen Konflikt mit anderen MQTT-Brokern auf dem gleichen System zu vermeiden.
+Ja. Standardmäßig startet der Shelly-Adapter einen eigenen MQTT-Broker intern, welcher auf dem Port ``1882`` gestartet wird, um einen Konflikt mit anderen MQTT-Brokern auf dem gleichen System zu vermeiden. Soll stattdessen ein bestehender MQTT-Broker verwendet werden, wird in den MQTT-Einstellungen der **MQTT-Modus** auf `MQTT-Client (externer Broker)` gesetzt und die Adresse des Brokers eingetragen. Details siehe [MQTT - Externer MQTT-Broker](protocol-mqtt.md#externer-mqtt-broker-client-modus).
 
 ## Kann die Cloud-Verbindung weiterhin genutzt werden, wenn der Shelly-Adapter verwendet wird?
 

@@ -1,14 +1,22 @@
 import type { EventEmitter } from 'node:events';
+import { connect as connectBroker, type IClientOptions, type MqttClient as BrokerConnection } from 'mqtt';
 import mqtt, { type Connection, type MqttPacket } from 'mqtt-connection';
 import * as net from 'node:net';
 
 import { BaseClient, BaseServer } from './base';
 import * as datapoints from '../datapoints';
+import {
+    CMD_SRC,
+    getBrokerUrl,
+    getExternalDeviceKey,
+    INIT_SRC,
+    isOnlinePayload,
+    isShellyDeviceSegment,
+    parseExternalTopic,
+} from './mqtt-topics';
 import { version as adapterVersion } from '../../../package.json';
 import type { ShellyAdapter } from '../../main';
 import type ObjectHelper from '../objectHelper';
-
-const INIT_SRC = 'iobroker-init';
 
 /** A queued/awaited MQTT message kept for QoS>0 resends, keyed by message id. */
 interface CachedMessage {
@@ -89,12 +97,14 @@ class MQTTClient extends BaseClient {
             const name = self.getId();
             if (name) {
                 const previous = this.clientlist[name];
-                if (previous) {
+                // Register the new client first, so destroy() of the old client detects the replacement
+                // and does not set the device offline (e.g. reconnect after an IP change behind a range extender)
+                this.clientlist[name] = self;
+                if (previous && previous !== self) {
                     previous
                         .destroy()
                         .catch((e: unknown) => previous.adapter.log.error(`[MQTT] destroy failed: ${String(e)}`));
                 }
-                this.clientlist[name] = self;
             }
         }
     }
@@ -297,6 +307,26 @@ class MQTTClient extends BaseClient {
                     }
                 }
 
+                // Update IP address from the status notifications (e.g. after an IP change behind a range extender)
+                if (
+                    packet.topic === `${this.getMqttPrefix()}/status/wifi` ||
+                    packet.topic === `${this.getMqttPrefix()}/status/eth`
+                ) {
+                    try {
+                        const payloadObj = JSON.parse(packet.payload.toString());
+
+                        const ip = payloadObj?.sta_ip || payloadObj?.ip;
+                        if (ip && ip !== this.getIP()) {
+                            await this.setIP(ip, `Gen 2+ ${packet.topic}`);
+                            await this.adapter.deviceStatusUpdate(this.getDeviceId(), true); // Device online
+                        }
+                    } catch (err) {
+                        this.adapter.log.debug(
+                            `[MQTT] Error parsing network status: ${this.getLogInfo()} - topic: ${packet.topic}, error: ${err}`,
+                        );
+                    }
+                }
+
                 // Log debug messages for Gen 2+ devices (if enabled in instance configuration)
                 if (packet.topic === `${this.getMqttPrefix()}/debug/log`) {
                     if (this.adapter.config.logDebugMessages) {
@@ -374,7 +404,19 @@ class MQTTClient extends BaseClient {
             );
         }
 
-        super.destroy();
+        // If a newer connection of the same device has already been registered, the device is still online.
+        // Otherwise the (async) destroy of the old connection could set the device offline after the new
+        // connection brought it online again.
+        const ownId = this.getId();
+        const isReplaced =
+            !!ownId && MQTTClient.clientlist?.[ownId] !== undefined && MQTTClient.clientlist[ownId] !== this;
+        if (isReplaced) {
+            this.adapter.log.debug(
+                `[MQTT] Destroying ${this.getLogInfo()} - replaced by a newer connection, keeping online state`,
+            );
+        }
+
+        super.destroy(!isReplaced);
         this.adapter.log.debug(`[MQTT] Destroying`);
 
         for (const messageId in this.messageCache) {
@@ -1194,5 +1236,625 @@ export class MQTTServer extends BaseServer {
                 .catch((e: unknown) => this.adapter.log.error(`[MQTT Server] destroy failed: ${String(e)}`));
         }
         this.server.close();
+    }
+}
+
+/**
+ * A single Shelly device connected to an external MQTT broker. Uses the shared connection of
+ * {@link MQTTServerExternal} instead of an own TCP stream - all incoming messages are routed to
+ * {@link handleMessage}, all outgoing messages are published through the server.
+ */
+class ExternalMQTTDeviceClient extends MQTTClient {
+    private readonly server: MQTTServerExternal;
+    /** Objects are created and the initial requests were sent */
+    initialized = false;
+    /** Last online state reported via the broker (online topic / last will) */
+    brokerOnline: boolean | undefined;
+    /** The HTTP polling (httpIoBrokerState) is running */
+    private httpPolling = false;
+
+    constructor(
+        adapter: ShellyAdapter,
+        objectHelper: ObjectHelper,
+        eventEmitter: EventEmitter,
+        prefix: string,
+        server: MQTTServerExternal,
+    ) {
+        // There is no own stream - start() is overwritten and does nothing
+        super(adapter, objectHelper, eventEmitter, undefined as unknown as net.Socket);
+
+        this.server = server;
+        // Like the client id on the internal broker (keeps the case of the serial, e.g. for Gen 1 devices)
+        this.id = prefix.split('/').pop();
+        this.mqttprefix = prefix;
+    }
+
+    start(): void {
+        // The connection is handled by MQTTServerExternal
+    }
+
+    /**
+     * @inheritdoc
+     */
+    getSerialId(): string {
+        if (!this.serialId && this.id) {
+            this.serialId = this.id.replace(/(.+)-(.+)/, '$2');
+        }
+        return this.serialId ?? '';
+    }
+
+    /**
+     * @inheritdoc
+     */
+    getDeviceClass(): string {
+        if (!this.deviceClass && this.id) {
+            this.deviceClass = this.id.replace(/(.+)-(.+)/, '$1');
+        }
+        return this.deviceClass ?? '';
+    }
+
+    /**
+     * The message ids are unique over all devices, so the answers on the shared response
+     * topics (`iobroker/rpc`, `iobroker-init/rpc`) can be assigned to the device.
+     */
+    getNextMsgId(): number {
+        return this.server.registerRpcId(this);
+    }
+
+    /**
+     * Changes the topic prefix (e.g. if the device publishes with a folder which was not known yet)
+     *
+     * @param prefix - new topic prefix
+     */
+    setMqttPrefix(prefix: string): void {
+        if (prefix && prefix !== this.mqttprefix) {
+            this.adapter.log.info(
+                `[MQTT External] Topic prefix of ${this.getLogInfo()} changed from "${this.mqttprefix}" to "${prefix}"`,
+            );
+            this.mqttprefix = prefix;
+        }
+    }
+
+    /**
+     * @inheritdoc
+     */
+    publishStateValue(topic: string, value: any): void {
+        topic = this.replacePrefixIn(topic);
+
+        const qos = Number(this.adapter.config.qos) || 0;
+
+        this.adapter.log.debug(
+            `[MQTT External] Send state to ${this.getLogInfo()} with QoS ${qos}: ${topic} = ${value}`,
+        );
+        this.server.publish(topic, value, qos as 0 | 1 | 2);
+    }
+
+    /**
+     * Mirrors the initialization of a device connected to the internal broker:
+     * creates the objects and requests the current state of the device.
+     */
+    async initialize(): Promise<void> {
+        if (this.initialized || this.initializing) {
+            return;
+        }
+
+        if (!this.deviceExists()) {
+            this.adapter.log.error(
+                `[MQTT External] (Shelly?) device unknown, configuration for topic prefix "${this.getMqttPrefix()}" does not exist! Maybe this device is not supported in this adapter version (${adapterVersion}).`,
+            );
+            return;
+        }
+
+        this.adapter.log.info(`[MQTT External] Initializing device with topic prefix "${this.getMqttPrefix()}"`);
+        this.initializing = true;
+
+        try {
+            await this.initDeviceModeFromState();
+            await this.deleteOldStates();
+            await this.createObjects();
+
+            if (this.isInitAborted('createObjects')) {
+                return;
+            }
+
+            await this.initIPFromState();
+
+            // The online state might have been received before the device objects existed
+            if (this.brokerOnline !== undefined) {
+                await this.adapter.deviceStatusUpdate(this.getDeviceId(), this.brokerOnline);
+            }
+
+            this.initialized = true;
+            this.requestStatus(true);
+
+            this.adapter.log.info(`[MQTT External] Device with topic prefix "${this.getMqttPrefix()}" initialized.`);
+        } finally {
+            this.initializing = false;
+        }
+
+        if (this.publishQueue.length > 0) {
+            this.adapter.log.debug(
+                `[MQTT External] Processing ${this.publishQueue.length} queued packets for ${this.getLogInfo()}`,
+            );
+            await this.processPublishQueue();
+        }
+
+        this.startHttpPolling();
+    }
+
+    /**
+     * Starts polling the states which are only available via HTTP - as soon as the device is online
+     * and its IP address is known. Devices which are not reachable via HTTP (e.g. behind a range
+     * extender) do not block the initialization.
+     */
+    startHttpPolling(): void {
+        if (!this.initialized || this.httpPolling || this.destroying || !this.isOnline() || !this.getIP()) {
+            return;
+        }
+
+        this.httpPolling = true;
+        this.httpIoBrokerState().catch(err =>
+            this.adapter.log.debug(`[MQTT External] HTTP polling of ${this.getLogInfo()} failed: ${err}`),
+        );
+    }
+
+    /**
+     * Stops instead of retrying while the device is offline - restarted by {@link startHttpPolling}
+     */
+    async httpIoBrokerState(): Promise<void> {
+        if (this.destroying || !this.isOnline() || !this.getIP()) {
+            this.httpPolling = false;
+            return;
+        }
+
+        await super.httpIoBrokerState();
+    }
+
+    /**
+     * Asks the device to publish its current state (and the device information like the IP address)
+     *
+     * @param withDeviceInfo - also request the device information (firmware version, profile)
+     */
+    requestStatus(withDeviceInfo = false): void {
+        if (this.getDeviceGen() >= 2) {
+            if (withDeviceInfo) {
+                this.publishStateValue(
+                    '<mqttprefix>/rpc',
+                    JSON.stringify({
+                        id: this.getNextMsgId(),
+                        src: INIT_SRC,
+                        method: 'Shelly.GetDeviceInfo',
+                        params: { ident: true },
+                    }),
+                );
+            }
+
+            this.publishStateValue(
+                '<mqttprefix>/rpc',
+                JSON.stringify({
+                    id: this.getNextMsgId(),
+                    src: INIT_SRC,
+                    method: 'Shelly.GetStatus',
+                }),
+            );
+
+            this.publishStateValue('<mqttprefix>/command', 'status_update');
+        } else {
+            this.publishStateValue('shellies/<mqttprefix>/command', 'update');
+        }
+    }
+
+    /**
+     * Handle an incoming message of this device (queued while the device is initializing)
+     *
+     * @param topic - MQTT topic
+     * @param payload - payload of the message
+     */
+    async handleMessage(topic: string, payload: Buffer): Promise<void> {
+        if (this.adapter.isUnloaded || this.destroying) {
+            return;
+        }
+
+        this.publishQueue.push({ topic, payload });
+
+        if (!this.processingQueue && !this.initializing) {
+            await this.processPublishQueue();
+        }
+    }
+
+    async destroy(): Promise<void> {
+        this.initialized = false;
+        this.httpPolling = false;
+        await super.destroy();
+    }
+}
+
+/**
+ * Connects the adapter as a client to an existing (external) MQTT broker. Subscribes to the topics of
+ * all Shelly devices and creates an {@link ExternalMQTTDeviceClient} for every discovered device.
+ */
+export class MQTTServerExternal extends BaseServer {
+    private connection: BrokerConnection | undefined;
+    /** Device clients by device key (see {@link getExternalDeviceKey}) */
+    private readonly deviceClients = new Map<string, ExternalMQTTDeviceClient>();
+    /** Retained messages of not yet known devices (by device key), replayed when the device is created */
+    private readonly pendingRetained = new Map<string, { prefix: string; messages: Map<string, Buffer> }>();
+    /** Device key of the client which sent the rpc request with this id */
+    private readonly rpcIds = new Map<number, string>();
+    private rpcId = 1;
+    /** True while the connection to the broker is established */
+    private connected = false;
+
+    constructor(adapter: ShellyAdapter, objectHelper: ObjectHelper, eventEmitter: EventEmitter) {
+        super(adapter, objectHelper, eventEmitter);
+    }
+
+    listen(): void {
+        let brokerUrl: string | undefined;
+        try {
+            brokerUrl = getBrokerUrl(this.adapter.config.mqttClientHost, this.adapter.config.mqttClientPort);
+        } catch (err) {
+            this.adapter.log.error(
+                `[MQTT External] Invalid broker host "${this.adapter.config.mqttClientHost}" (expected e.g. "192.168.1.10" or "mqtt://broker.local:1883"): ${err}`,
+            );
+            return;
+        }
+
+        if (!brokerUrl) {
+            this.adapter.log.error('[MQTT External] Host of the external MQTT broker is not configured!');
+            return;
+        }
+
+        const options: IClientOptions = {
+            clientId: `iobroker_${this.adapter.namespace.replace('.', '_')}`,
+            reconnectPeriod: 5000,
+            connectTimeout: 10000,
+            clean: true,
+        };
+        if (this.adapter.config.mqttusername) {
+            options.username = this.adapter.config.mqttusername;
+        }
+        if (this.adapter.config.mqttpassword) {
+            options.password = this.adapter.config.mqttpassword;
+        }
+
+        this.adapter.log.info(`[MQTT External] Connecting to external MQTT broker ${brokerUrl}`);
+        this.connection = connectBroker(brokerUrl, options);
+
+        this.connection.on('connect', () => {
+            this.connected = true;
+            this.adapter.log.info(`[MQTT External] Connected to external MQTT broker ${brokerUrl}`);
+            this.onConnect().catch(err => this.adapter.log.error(`[MQTT External] Error after connect: ${err}`));
+        });
+
+        this.connection.on('message', (topic, payload, packet) => {
+            this.onMessage(topic, payload, !!packet?.retain).catch(err =>
+                this.adapter.log.error(`[MQTT External] Error processing message on ${topic}: ${err}`),
+            );
+        });
+
+        this.connection.on('error', err => {
+            this.adapter.log.error(`[MQTT External] Connection error: ${err?.message ?? err}`);
+        });
+
+        this.connection.on('reconnect', () => {
+            this.adapter.log.debug('[MQTT External] Reconnecting to external MQTT broker');
+        });
+
+        this.connection.on('close', () => {
+            if (this.connected) {
+                this.connected = false;
+                this.adapter.log.warn('[MQTT External] Connection to external MQTT broker closed');
+                // Without the broker, the devices cannot be reached anymore
+                for (const client of this.deviceClients.values()) {
+                    client.brokerOnline = undefined;
+                    void this.adapter.deviceStatusUpdate(client.getDeviceId(), false);
+                }
+            }
+        });
+    }
+
+    /**
+     * Subscribe to all Shelly topics and request the current state of the known devices
+     */
+    private async onConnect(): Promise<void> {
+        const topics = [
+            // Gen 1
+            'shellies/#',
+            // Gen 2+ with the default topic prefix
+            '+/online',
+            '+/events/#',
+            '+/status/#',
+            '+/debug/#',
+            // Gen 2+ with a folder in front of the topic prefix (e.g. shelly/<prefix>)
+            '+/+/online',
+            '+/+/events/#',
+            '+/+/status/#',
+            '+/+/debug/#',
+            // Responses of the devices
+            `${CMD_SRC}/rpc`,
+            `${INIT_SRC}/rpc`,
+        ];
+
+        try {
+            await this.connection?.subscribeAsync(topics, { qos: 0 });
+        } catch (err) {
+            this.adapter.log.error(`[MQTT External] Unable to subscribe to topics: ${err}`);
+        }
+
+        // Gen 1: ask all devices to announce themselves and to publish their state
+        this.publish('shellies/command', 'announce', 0);
+        this.publish('shellies/command', 'update', 0);
+
+        // Gen 2+ devices do not publish their state again when the adapter (re)connects
+        await this.createKnownDevices();
+        for (const client of this.deviceClients.values()) {
+            if (client.initialized) {
+                client.requestStatus();
+            }
+        }
+    }
+
+    /**
+     * Creates the clients of the Gen 2+ devices which already exist in ioBroker. Gen 1 devices are
+     * created when they announce themselves - they might also be connected via CoAP.
+     */
+    private async createKnownDevices(): Promise<void> {
+        try {
+            for (const deviceId of await this.adapter.getAllDeviceIds()) {
+                // Device ids are formatted as '<type>#<serial>#1', e.g. 'shellyplus1pm#44179394d4d4#1'
+                const [deviceType, serialId] = deviceId.split('#');
+                const deviceClass = datapoints.getDeviceClassByType(deviceType);
+                if (!deviceClass || !serialId || datapoints.getDeviceGen(deviceClass) < 2) {
+                    continue;
+                }
+
+                const defaultPrefix = `${deviceClass}-${serialId}`;
+                if (this.deviceClients.has(getExternalDeviceKey(defaultPrefix))) {
+                    continue;
+                }
+
+                // The configured topic prefix might contain a folder (e.g. shelly/<prefix>)
+                const prefixState = await this.adapter.getStateAsync(`${deviceId}.Mqtt.topicPrefix`);
+                const storedPrefix = typeof prefixState?.val === 'string' ? prefixState.val.trim() : '';
+                const prefix =
+                    storedPrefix && getExternalDeviceKey(storedPrefix) === getExternalDeviceKey(defaultPrefix)
+                        ? storedPrefix
+                        : defaultPrefix;
+
+                this.adapter.log.debug(
+                    `[MQTT External] Creating known device ${deviceId} with topic prefix "${prefix}"`,
+                );
+                this.getOrCreateClient(prefix);
+            }
+        } catch (err) {
+            this.adapter.log.error(`[MQTT External] Error creating known devices: ${err}`);
+        }
+    }
+
+    /**
+     * Returns the client of a device - creates (and initializes) it if it does not exist yet
+     *
+     * @param prefix - topic prefix of the device
+     */
+    private getOrCreateClient(prefix: string): ExternalMQTTDeviceClient {
+        const key = getExternalDeviceKey(prefix);
+        let client = this.deviceClients.get(key);
+        if (client) {
+            client.setMqttPrefix(prefix);
+            return client;
+        }
+
+        client = new ExternalMQTTDeviceClient(this.adapter, this.objectHelper, this.eventEmitter, prefix, this);
+        this.deviceClients.set(key, client);
+
+        const newClient = client;
+        newClient
+            .initialize()
+            .catch(err => this.adapter.log.error(`[MQTT External] Error initializing device "${prefix}": ${err}`));
+
+        // Replay retained messages which were received before the device was known
+        const pending = this.pendingRetained.get(key);
+        if (pending) {
+            this.pendingRetained.delete(key);
+            for (const [topic, payload] of pending.messages) {
+                void newClient.handleMessage(topic, payload);
+            }
+        }
+
+        return newClient;
+    }
+
+    private async onMessage(topic: string, payload: Buffer, retained: boolean): Promise<void> {
+        if (this.adapter.isUnloaded) {
+            return;
+        }
+
+        this.adapter.log.silly(
+            `[MQTT External] Message: ${topic} = ${payload.toString()}${retained ? ' (retained)' : ''}`,
+        );
+
+        // Responses on the shared topics
+        if (topic === `${CMD_SRC}/rpc` || topic === `${INIT_SRC}/rpc`) {
+            await this.onRpcResponse(topic, payload);
+            return;
+        }
+
+        // Gen 1: announce messages of all devices on the same topic
+        if (topic === 'shellies/announce') {
+            await this.onGen1Announce(topic, payload);
+            return;
+        }
+
+        const device = parseExternalTopic(topic);
+        if (!device) {
+            return;
+        }
+
+        const key = getExternalDeviceKey(device.prefix);
+        const isOnlineTopic = topic === `${device.prefix}/online` || topic === `shellies/${device.prefix}/online`;
+        let client = this.deviceClients.get(key);
+
+        if (!client) {
+            // Retained messages of unknown devices might belong to devices which have been removed a long
+            // time ago - only create a device after a live message or a retained online = true
+            if (retained && !(isOnlineTopic && isOnlinePayload(payload))) {
+                const pending = this.pendingRetained.get(key) ?? { prefix: device.prefix, messages: new Map() };
+                pending.messages.set(topic, Buffer.from(payload));
+                this.pendingRetained.set(key, pending);
+                return;
+            }
+
+            this.adapter.log.info(`[MQTT External] New Shelly device discovered with topic prefix "${device.prefix}"`);
+        }
+
+        client = this.getOrCreateClient(device.prefix);
+
+        if (isOnlineTopic) {
+            const online = isOnlinePayload(payload);
+            const wasOffline = client.brokerOnline === false;
+            client.brokerOnline = online;
+            await this.adapter.deviceStatusUpdate(client.getDeviceId(), online);
+
+            if (online && wasOffline && client.initialized) {
+                this.adapter.log.debug(`[MQTT External] ${client.getLogInfo()} is online again - requesting status`);
+                client.requestStatus(true);
+            }
+        } else if (!retained && client.brokerOnline !== true) {
+            // A live message - the device is connected to the broker
+            client.brokerOnline = true;
+            await this.adapter.deviceStatusUpdate(client.getDeviceId(), true);
+        }
+
+        await client.handleMessage(topic, payload);
+        client.startHttpPolling();
+    }
+
+    /**
+     * Assigns a response on `iobroker/rpc` or `iobroker-init/rpc` to the device which sent the request
+     *
+     * @param topic - MQTT topic
+     * @param payload - payload of the response
+     */
+    private async onRpcResponse(topic: string, payload: Buffer): Promise<void> {
+        let response: { id?: number; src?: string };
+        try {
+            response = JSON.parse(payload.toString());
+        } catch {
+            this.adapter.log.debug(`[MQTT External] Ignoring invalid rpc response on ${topic}: ${payload.toString()}`);
+            return;
+        }
+
+        let key: string | undefined;
+        if (typeof response?.id === 'number' && this.rpcIds.has(response.id)) {
+            key = this.rpcIds.get(response.id);
+            this.rpcIds.delete(response.id);
+        } else if (typeof response?.src === 'string') {
+            key = response.src.toLowerCase();
+        }
+
+        const client = key ? this.deviceClients.get(key) : undefined;
+        if (!client) {
+            this.adapter.log.debug(
+                `[MQTT External] Ignoring rpc response of unknown device on ${topic}: ${payload.toString()}`,
+            );
+            return;
+        }
+
+        await client.handleMessage(topic, payload);
+        client.startHttpPolling(); // the response might contain the IP address
+    }
+
+    /**
+     * Gen 1 devices publish their announcement (incl. the IP address) on a shared topic
+     *
+     * @param topic - MQTT topic
+     * @param payload - payload of the announcement
+     */
+    private async onGen1Announce(topic: string, payload: Buffer): Promise<void> {
+        try {
+            const announce = JSON.parse(payload.toString());
+            if (typeof announce?.id === 'string' && isShellyDeviceSegment(announce.id)) {
+                const client = this.getOrCreateClient(announce.id);
+                if (client.brokerOnline !== true) {
+                    client.brokerOnline = true;
+                    await this.adapter.deviceStatusUpdate(client.getDeviceId(), true);
+                }
+                await client.handleMessage(topic, payload);
+                client.startHttpPolling();
+            }
+        } catch {
+            this.adapter.log.debug(`[MQTT External] Ignoring invalid announcement: ${payload.toString()}`);
+        }
+    }
+
+    /**
+     * Returns a message id which is unique over all devices and remembers the device which uses it
+     *
+     * @param client - device client which sends the request
+     */
+    registerRpcId(client: ExternalMQTTDeviceClient): number {
+        this.rpcId = (this.rpcId % 0xffff) + 1;
+        this.rpcIds.delete(this.rpcId);
+        this.rpcIds.set(this.rpcId, getExternalDeviceKey(client.getId() ?? ''));
+
+        // Keep only the latest ids - unanswered requests must not fill the memory
+        if (this.rpcIds.size > 1000) {
+            const oldest = this.rpcIds.keys().next().value;
+            if (oldest !== undefined) {
+                this.rpcIds.delete(oldest);
+            }
+        }
+
+        return this.rpcId;
+    }
+
+    /**
+     * Publish a message through the external broker
+     *
+     * @param topic - MQTT topic
+     * @param value - payload
+     * @param qos - QoS level
+     */
+    publish(topic: string, value: string | Buffer, qos: 0 | 1 | 2): void {
+        if (!this.connection?.connected) {
+            this.adapter.log.warn(`[MQTT External] Unable to publish ${topic} - not connected to the external broker`);
+            return;
+        }
+
+        this.connection.publish(topic, value, { qos }, err => {
+            if (err) {
+                this.adapter.log.debug(`[MQTT External] Unable to publish ${topic}: ${err}`);
+            }
+        });
+    }
+
+    /**
+     * Find the client of a device, e.g. to perform an HTTP request with the IP address known by the client.
+     *
+     * @param deviceId ioBroker device id, e.g. `shellyplus1pm#44179394d4d4#1`
+     */
+    getClientByDeviceId(deviceId: string): MQTTClient | undefined {
+        return [...this.deviceClients.values()].find(client => client.getDeviceId() === deviceId);
+    }
+
+    destroy(): void {
+        super.destroy();
+        this.adapter.log.debug('[MQTT External] Destroying');
+
+        for (const client of this.deviceClients.values()) {
+            client
+                .destroy()
+                .catch((e: unknown) => this.adapter.log.error(`[MQTT External] destroy failed: ${String(e)}`));
+        }
+        this.deviceClients.clear();
+        this.pendingRetained.clear();
+        this.rpcIds.clear();
+
+        if (this.connection) {
+            this.connection.removeAllListeners();
+            this.connection.end(true);
+            this.connection = undefined;
+        }
     }
 }

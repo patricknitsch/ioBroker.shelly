@@ -132,6 +132,7 @@
     "Event": "Event",
     "Event count": "Event count",
     "External Humidity": "External Humidity",
+    "External MQTT broker host is not configured": "External MQTT broker host is not configured",
     "External Power": "External Power",
     "External power supply": "External power supply",
     "External sensor enabled": "External sensor enabled",

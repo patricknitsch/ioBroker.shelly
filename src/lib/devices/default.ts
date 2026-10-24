@@ -632,6 +632,12 @@ const defaultsgen2: DeviceDefinition = {
     },
     uptime: {
         mqtt: {
+            // Status notification - also works if the device is not reachable via HTTP (e.g. behind a range extender)
+            mqtt_publish: '<mqttprefix>/status/sys',
+            mqtt_publish_funct: value => {
+                const uptime = value ? JSON.parse(value)?.uptime : undefined;
+                return uptime !== undefined ? parseInt(uptime) : undefined;
+            },
             http_publish: '/rpc/Shelly.GetStatus',
             http_publish_funct: value => (value ? parseInt(JSON.parse(value).sys.uptime) : undefined),
         },
@@ -781,6 +787,9 @@ const defaultsgen2: DeviceDefinition = {
     },
     rssi: {
         mqtt: {
+            // Status notification - also works if the device is not reachable via HTTP (e.g. behind a range extender)
+            mqtt_publish: '<mqttprefix>/status/wifi',
+            mqtt_publish_funct: value => (value ? JSON.parse(value)?.rssi : undefined),
             http_publish: '/rpc/Shelly.GetStatus',
             http_publish_funct: value => (value ? JSON.parse(value).wifi.rssi : undefined),
         },

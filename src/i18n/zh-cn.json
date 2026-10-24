@@ -132,6 +132,7 @@
     "Event": "事件",
     "Event count": "事件计数",
     "External Humidity": "外部湿度",
+    "External MQTT broker host is not configured": "未配置外部 MQTT 代理的主机",
     "External Power": "外部电源",
     "External power supply": "外部电力供应",
     "External sensor enabled": "已启用外部传感器",
