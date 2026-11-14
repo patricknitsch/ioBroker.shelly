@@ -244,6 +244,7 @@ See [documentation (en)](https://github.com/iobroker-community-adapters/ioBroker
 - (patricknitsch) **ADAPTER MEETS ioBroker SECRETS**: The central credentials of the Admin settings (Admin 8 and newer) can now be used for the MQTT and HTTP user credentials (credential "Login & password").
 - (patricknitsch) The device name of Gen2+ devices is also taken via MQTT, so devices behind a Shelly range extender show their name instead of "Device ...". A name changed in ioBroker is now confirmed for these devices as well.
 - (patricknitsch) External MQTT broker: a warning is logged if a device does not answer requests via MQTT (e.g. "RPC over MQTT" disabled on the device).
+- (patricknitsch) External MQTT broker: devices with a folder in front of the topic prefix (e.g. `shelly/`) answer below this folder, so name, firmware and model are also received if the broker only allows the devices to publish below their folder.
 
 ### 12.1.2 (2026-11-13)
 

@@ -78,7 +78,7 @@ Use this mode if you already have a central MQTT broker (e.g. Mosquitto, EMQX) a
 #### Notes
 
 - Keep the **default MQTT topic prefix** (e.g. `shellyplus1pm-44179394d4d4`) or the default prefix with one folder in front of it (e.g. `shelly/shellyplus1pm-44179394d4d4`). The adapter identifies the device by the topic prefix (device type + serial number), **not** by the MQTT client id.
-- The adapter subscribes to `shellies/#` (Gen1) and `+/online`, `+/events/#`, `+/status/#`, `+/debug/#` as well as the same topics with one folder (`+/+/...`) for Gen2+ devices. The answers of the devices are received on `iobroker/rpc` and `iobroker-init/rpc`.
+- The adapter subscribes to `shellies/#` (Gen1) and `+/online`, `+/events/#`, `+/status/#`, `+/debug/#` as well as the same topics with one folder (`+/+/...`) for Gen2+ devices. The answers of the devices are received on `iobroker/rpc` and `iobroker-init/rpc` - for devices with a folder in front of the topic prefix below the same folder (e.g. `shelly/iobroker/rpc` and `shelly/iobroker-init/rpc`). If your broker restricts the topics a device may publish to (ACL), these topics must be allowed.
 - **Generation 2+ devices:** enable all RPC notification options (see screenshot above)
 - To avoid stale retained topics of devices which have been removed, a new device is only created after a live message or a retained `online` = `true` message. Gen2+ devices which already exist in ioBroker are created directly after the connection to the broker.
 - The online state of a device is taken from its `online` topic (last will). If the connection to the broker is lost, all devices are set offline.

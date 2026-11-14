@@ -39,6 +39,8 @@ exports.isShellyDeviceSegment = isShellyDeviceSegment;
 exports.parseExternalTopic = parseExternalTopic;
 exports.isOnlinePayload = isOnlinePayload;
 exports.getBrokerUrl = getBrokerUrl;
+exports.getExternalRpcSrc = getExternalRpcSrc;
+exports.parseExternalRpcResponseTopic = parseExternalRpcResponseTopic;
 const datapoints = __importStar(require("../datapoints"));
 /** Source of the initial requests of the adapter - devices answer on `iobroker-init/rpc` */
 exports.INIT_SRC = 'iobroker-init';
@@ -134,5 +136,28 @@ function getBrokerUrl(host, port) {
         parsedUrl.port = String(parseInt(String(port), 10) || 1883);
     }
     return `${parsedUrl.protocol}//${parsedUrl.host}${parsedUrl.pathname === '/' ? '' : parsedUrl.pathname}`;
+}
+/**
+ * Source of an RPC request on an external broker. The device answers on `<src>/rpc` - for a device
+ * with a folder in front of its topic prefix (e.g. `shelly/<prefix>`), the answer is also published
+ * below this folder (e.g. `shelly/iobroker-init/rpc`), so a broker which only allows the devices to
+ * publish below their folder delivers it as well.
+ *
+ * @param prefix - topic prefix of the device
+ * @param src - source used by the adapter (`iobroker` or `iobroker-init`)
+ */
+function getExternalRpcSrc(prefix, src) {
+    const parts = prefix.split('/');
+    return parts.length > 1 ? `${parts.slice(0, -1).join('/')}/${src}` : src;
+}
+/**
+ * Checks if a topic is the answer topic of an RPC request of the adapter on an external broker
+ *
+ * @param topic - MQTT topic, e.g. `iobroker-init/rpc` or `shelly/iobroker-init/rpc`
+ * @returns the answer topic without folder (`iobroker/rpc` or `iobroker-init/rpc`), or undefined
+ */
+function parseExternalRpcResponseTopic(topic) {
+    const match = /^(?:[^/]+\/)?(iobroker|iobroker-init)\/rpc$/.exec(topic);
+    return match ? `${match[1]}/rpc` : undefined;
 }
 //# sourceMappingURL=mqtt-topics.js.map

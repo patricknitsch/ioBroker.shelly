@@ -9,9 +9,11 @@ import {
     CMD_SRC,
     getBrokerUrl,
     getExternalDeviceKey,
+    getExternalRpcSrc,
     INIT_SRC,
     isOnlinePayload,
     isShellyDeviceSegment,
+    parseExternalRpcResponseTopic,
     parseExternalTopic,
 } from './mqtt-topics';
 import { version as adapterVersion } from '../../../package.json';
@@ -1350,6 +1352,11 @@ class ExternalMQTTDeviceClient extends MQTTClient {
                 `[MQTT External] Topic prefix of ${this.getLogInfo()} changed from "${this.mqttprefix}" to "${prefix}"`,
             );
             this.mqttprefix = prefix;
+
+            // The requests sent so far went to the old topic - send them again
+            if (this.initialized) {
+                this.requestStatus(true);
+            }
         }
     }
 
@@ -1358,6 +1365,23 @@ class ExternalMQTTDeviceClient extends MQTTClient {
      */
     publishStateValue(topic: string, value: any): void {
         topic = this.replacePrefixIn(topic);
+
+        // Let the device answer below its own folder (e.g. shelly/iobroker/rpc instead of iobroker/rpc)
+        if (
+            topic === `${this.getMqttPrefix()}/rpc` &&
+            typeof value === 'string' &&
+            this.getMqttPrefix().includes('/')
+        ) {
+            try {
+                const request = JSON.parse(value);
+                if (request?.src === CMD_SRC || request?.src === INIT_SRC) {
+                    request.src = getExternalRpcSrc(this.getMqttPrefix(), request.src);
+                    value = JSON.stringify(request);
+                }
+            } catch {
+                // no JSON - send unchanged
+            }
+        }
 
         const qos = Number(this.adapter.config.qos) || 0;
 
@@ -1497,7 +1521,7 @@ class ExternalMQTTDeviceClient extends MQTTClient {
             this.rpcAnswerTimeout = undefined;
             if (!this.rpcAnswered && !this.destroying && this.isOnline()) {
                 this.adapter.log.warn(
-                    `[MQTT External] ${this.getLogInfo()} does not answer RPC requests via MQTT. Please enable "RPC over MQTT" in the MQTT settings of the device and check that the broker allows the device to publish to "${INIT_SRC}/rpc" and "${CMD_SRC}/rpc"`,
+                    `[MQTT External] ${this.getLogInfo()} does not answer RPC requests via MQTT. Please enable "RPC over MQTT" in the MQTT settings of the device and check that the broker allows the device to publish to "${getExternalRpcSrc(this.getMqttPrefix(), INIT_SRC)}/rpc" and "${getExternalRpcSrc(this.getMqttPrefix(), CMD_SRC)}/rpc"`,
                 );
             }
         }, 60 * 1000);
@@ -1648,6 +1672,8 @@ export class MQTTServerExternal extends BaseServer {
             // Responses of the devices
             `${CMD_SRC}/rpc`,
             `${INIT_SRC}/rpc`,
+            `+/${CMD_SRC}/rpc`,
+            `+/${INIT_SRC}/rpc`,
         ];
 
         try {
@@ -1748,9 +1774,10 @@ export class MQTTServerExternal extends BaseServer {
             `[MQTT External] Message: ${topic} = ${payload.toString()}${retained ? ' (retained)' : ''}`,
         );
 
-        // Responses on the shared topics
-        if (topic === `${CMD_SRC}/rpc` || topic === `${INIT_SRC}/rpc`) {
-            await this.onRpcResponse(topic, payload);
+        // Responses on the shared topics (optionally below a folder, e.g. shelly/iobroker/rpc)
+        const responseTopic = parseExternalRpcResponseTopic(topic);
+        if (responseTopic) {
+            await this.onRpcResponse(responseTopic, payload);
             return;
         }
 

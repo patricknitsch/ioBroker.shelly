@@ -78,7 +78,7 @@ Dieser Modus ist für Installationen gedacht, in denen bereits ein zentraler MQT
 #### Hinweise
 
 - Verwende das **Standard-Topic-Präfix** (z.B. `shellyplus1pm-44179394d4d4`) oder das Standard-Präfix mit einem vorangestellten Ordner (z.B. `shelly/shellyplus1pm-44179394d4d4`). Der Adapter erkennt das Gerät am Topic-Präfix (Gerätetyp + Seriennummer), **nicht** an der MQTT-Client-ID.
-- Der Adapter abonniert `shellies/#` (Gen1) sowie `+/online`, `+/events/#`, `+/status/#`, `+/debug/#` und dieselben Topics mit einem Ordner (`+/+/...`) für Gen2+ Geräte. Die Antworten der Geräte werden über `iobroker/rpc` und `iobroker-init/rpc` empfangen.
+- Der Adapter abonniert `shellies/#` (Gen1) sowie `+/online`, `+/events/#`, `+/status/#`, `+/debug/#` und dieselben Topics mit einem Ordner (`+/+/...`) für Gen2+ Geräte. Die Antworten der Geräte werden über `iobroker/rpc` und `iobroker-init/rpc` empfangen - bei Geräten mit Ordner vor dem Topic-Präfix unterhalb desselben Ordners (z.B. `shelly/iobroker/rpc` und `shelly/iobroker-init/rpc`). Schränkt der Broker die Topics ein, auf die ein Gerät publizieren darf (ACL), müssen diese Topics erlaubt sein.
 - **Generation 2+ Geräte:** alle RPC-Benachrichtigungsoptionen aktivieren (siehe Screenshot oben)
 - Um veraltete Retained-Topics von entfernten Geräten zu ignorieren, wird ein neues Gerät erst nach einer Live-Nachricht oder einer Retained-Nachricht `online` = `true` angelegt. Gen2+ Geräte, die bereits in ioBroker existieren, werden direkt nach dem Verbindungsaufbau zum Broker angelegt.
 - Der Online-Status eines Geräts wird aus seinem `online`-Topic (Last Will) übernommen. Bricht die Verbindung zum Broker ab, werden alle Geräte auf offline gesetzt.

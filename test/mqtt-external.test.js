@@ -2,8 +2,10 @@ const assert = require('node:assert');
 const {
     getBrokerUrl,
     getExternalDeviceKey,
+    getExternalRpcSrc,
     isOnlinePayload,
     isShellyDeviceSegment,
+    parseExternalRpcResponseTopic,
     parseExternalTopic,
 } = require('../build/lib/protocol/mqtt-topics');
 
@@ -81,5 +83,23 @@ describe('Test external MQTT broker', function () {
         assert.strictEqual(getBrokerUrl('', 1883), undefined);
         assert.strictEqual(getBrokerUrl(undefined, 1883), undefined);
         assert.throws(() => getBrokerUrl('mqtt://', 1883));
+    });
+
+    it('Test getExternalRpcSrc', function () {
+        assert.strictEqual(getExternalRpcSrc('shellyplus1pm-44179394d4d4', 'iobroker-init'), 'iobroker-init');
+        assert.strictEqual(
+            getExternalRpcSrc('shelly/shellyplus1pm-44179394d4d4', 'iobroker-init'),
+            'shelly/iobroker-init',
+        );
+        assert.strictEqual(getExternalRpcSrc('home/shellyplus1pm-44179394d4d4', 'iobroker'), 'home/iobroker');
+    });
+
+    it('Test parseExternalRpcResponseTopic', function () {
+        assert.strictEqual(parseExternalRpcResponseTopic('iobroker-init/rpc'), 'iobroker-init/rpc');
+        assert.strictEqual(parseExternalRpcResponseTopic('iobroker/rpc'), 'iobroker/rpc');
+        assert.strictEqual(parseExternalRpcResponseTopic('shelly/iobroker-init/rpc'), 'iobroker-init/rpc');
+        assert.strictEqual(parseExternalRpcResponseTopic('home/iobroker/rpc'), 'iobroker/rpc');
+        assert.strictEqual(parseExternalRpcResponseTopic('shellyplus1pm-44179394d4d4/rpc'), undefined);
+        assert.strictEqual(parseExternalRpcResponseTopic('a/b/iobroker/rpc'), undefined);
     });
 });
