@@ -2,6 +2,8 @@ export interface ShellyAdapterConfig {
     protocol: 'mqtt' | 'coap' | 'both';
     httpusername: string;
     httppassword: string;
+    /** Central ioBroker credential (login & password) for the HTTP login of the devices - empty = use the fields */
+    httpCredential?: string;
     polltime: number | string;
     autoupdate: boolean;
     updateUnchangedObjects: boolean;
@@ -12,6 +14,14 @@ export interface ShellyAdapterConfig {
     port: number | string;
     mqttusername: string;
     mqttpassword: string;
+    /** Central ioBroker credential (login & password) for MQTT - empty = use the fields */
+    mqttCredential?: string;
+    /** `broker`: start the internal MQTT broker, `client`: connect to an external MQTT broker */
+    mqttMode?: 'broker' | 'client';
+    /** Host (or URL like `mqtts://host:8883`) of the external MQTT broker */
+    mqttClientHost?: string;
+    /** Port of the external MQTT broker (used if the host contains no port) */
+    mqttClientPort?: number | string;
     qos: 0 | 1 | 2;
     coapbind: string;
     blacklist: {

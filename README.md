@@ -165,11 +165,11 @@ Notes:
 | Shelly Device                                   | CoAP | MQTT       |
 |-------------------------------------------------| ---- | ---------- |
 | Shelly 1 Gen4 (shelly1g4)                       | ❌   | >= v9.4.0  |
-| Shelly 1L Gen4 (shelly1lg4)                      | ❌   | >= v12.0.0 |
+| Shelly 1L Gen4 (shelly1lg4)                     | ❌   | >= v12.0.0 |
 | Shelly 1 PM Gen4 (shelly1pmg4)                  | ❌   | >= v9.4.0  |
 | Shelly 1 Mini Gen4 (shelly1minig4)              | ❌   | >= v9.4.0  |
 | Shelly 1 PM Mini Gen4 (shelly1pmminig4)         | ❌   | >= v9.4.0  |
-| Shelly 2L Gen4 (shelly2lg4)                      | ❌   | >= v12.0.0 |
+| Shelly 2L Gen4 (shelly2lg4)                     | ❌   | >= v12.0.0 |
 | Shelly 2 PM Gen4 (shelly2pmg4) (1)              | ❌   | >= v10.2.0 |
 | Shelly Dimmer Gen4 (shellydimmerg4) (*)         | ❌   | >= v10.5.0 |
 | Shelly Dimmer 0/1-10V PM Gen4 (shelly0110dimG4) | ❌   | >= v11.0.0 |
@@ -239,14 +239,30 @@ See [documentation (en)](https://github.com/iobroker-community-adapters/ioBroker
   ### **WORK IN PROGRESS**
 -->
 ### **WORK IN PROGRESS**
+- (patricknitsch) Added support for an external MQTT broker (client mode): instead of starting the internal broker, the adapter can connect to an existing MQTT broker (e.g. Mosquitto). Select the new option "MQTT mode" in the MQTT settings. Devices with the default topic prefix and with a folder in front of it (e.g. `shelly/<prefix>`) are supported.
+- (patricknitsch) Improved support for devices behind a Shelly range extender: RSSI and uptime are also updated via MQTT, the IP address is taken from the network status, a reconnect does not set the device offline anymore and the TCP online check is skipped for devices connected via MQTT.
+- (patricknitsch) **ADAPTER MEETS ioBroker SECRETS**: The central credentials of the Admin settings (Admin 8 and newer) can now be used for the MQTT and HTTP user credentials (credential "Login & password").
+- (patricknitsch) The device name of Gen2+ devices is also taken via MQTT, so devices behind a Shelly range extender show their name instead of "Device ...". A name changed in ioBroker is now confirmed for these devices as well.
+- (patricknitsch) External MQTT broker: a warning is logged if a device does not answer requests via MQTT (e.g. "RPC over MQTT" disabled on the device).
+- (patricknitsch) External MQTT broker: devices with a folder in front of the topic prefix (e.g. `shelly/`) answer below this folder, so name, firmware and model are also received if the broker only allows the devices to publish below their folder.
+
+### 12.1.2 (2026-11-13)
+
+- (mcm1957) Power units corrected for Top AC Portable EV Charger (topacportableevcharger) (#1702)
+
+### 12.1.1 (2026-11-08)
+
+- (mcm1957) Shelly Pro 1PM: fixed outdated switch status after Switch.Set via MQTT (refers to #1694)
+
+### 12.1.0 (2026-11-07)
+- (@GermanBluefox) Shelly Dimmer / Dimmer 2: the minimum brightness is no longer recognized as a separate device in visualizations and smart assistants
+- (GermanBluefox) Restarts of Bluetooth devices are detected (new state "lastRestart" and a warning in the log). Frequent restarts usually indicate a weak battery
+- (GermanBluefox) Button presses of a Bluetooth device are no longer lost after the device has restarted
 - (GermanBluefox) Updated packages
-
-### 12.1.0-alpha.1 (2026-10-14)
-
+- (GermanBluefox) (docs) Added note that BLE scanning is not supported on Gen4 devices in Zigbee mode (#1678)
+- (mcm1957) Fixed missing PLUGS_UI states after MQTT reconnect when firmware version was not yet known
+- (mcm1957) EMTemperature added to shellypro3em
 - (@mcm1957) Fixed digest authentication failing after ~7530 requests due to nonce counter never resetting and being formatted as decimal instead of hex (#1667). Thanks to @sadam6752-tech for detailled problemanalyses and solution.
-
-### 12.1.0-alpha.0 (2026-10-10)
-
 - (@mcm1957) Updated device icons to use device-specific images where available
 - (@mcm1957) Added support for Shelly I4 Gen4 (shellyi4g4) (#1645)
 - (@mcm1957) Fix stale switch state after MQTT command on Shelly Pro 4 PM and Shelly 2 PM Gen3. (#1640, #1627)
@@ -299,15 +315,6 @@ See [documentation (en)](https://github.com/iobroker-community-adapters/ioBroker
 - (@mcm1957) Adapter requires node.js >= 22, js-controller >= 6.0.11 and admin >= 7.8.23 now.
 - (@GermanBluefox) Device manager has been added providing info and control of devices and provisioning.
 - (@mcm1957) IMPORTANT: Please read the changelog at README.md listing more information.
-
-### 11.0.0 additional information 
-- (@mcm1957) Added Shelly Presence Gen 4
-- (@mcm1957) Added Shelly Cury
-- (@GermanBluefox) Added support for Device manager: info and control of devices and provisioning
-- (@GermanBluefox) Added detection of new devices in the background
-- (@mcm1957) Some missing states added at an illuminance component
-- (@mcm1957) DISABLE all PLUG_UI functionality due to unrecoverable HW faults.
-- (@mcm1957) Dependencies have been updated
 
 [Older changelogs can be found there](CHANGELOG_OLD.md)
 

@@ -7,6 +7,7 @@
     "CoAP and HTTP": "CoAP 和 HTTP",
     "CoAP ist supported by Gen1 devices, MQTT is supported by all devices (Gen1 and Gen2)": "Gen1 设备支持 CoAP，所有设备（Gen1 和 Gen2）都支持 MQTT",
     "CoAP settings": "CoAP设置",
+    "Credential (Admin settings)": "凭据（Admin 设置）",
     "Custom options": "自定义选项",
     "Debugging (expert options)": "调试（专家选项）",
     "Default QoS": "默认服务质量",
@@ -26,6 +27,12 @@
     "MQTT Server options": "MQTT 服务器选项",
     "MQTT Username": "MQTT用户名",
     "MQTT and HTTP": "MQTT 和 HTTP",
+    "MQTT broker (internal)": "MQTT 代理（内部）",
+    "MQTT broker host": "MQTT 代理主机",
+    "MQTT broker options": "MQTT 代理选项",
+    "MQTT broker port": "MQTT 代理端口",
+    "MQTT client (external broker)": "MQTT 客户端（外部代理）",
+    "MQTT mode": "MQTT 模式",
     "MQTT settings": "MQTT设置",
     "Must be configured on all Shelly devices": "必须在所有 Shelly 设备上配置",
     "Periodically scan network for new Shelly devices via mDNS": "通过 mDNS 定期扫描网络以查找新的 Shelly 设备",
@@ -38,5 +45,10 @@
     "Update objects even if there is no value change": "即使值没有变化也要更新对象",
     "User credentials for restricted login": "受限登录的用户凭据",
     "Will be used to authenticate against generation 1 devices": "将用于对第 1 代设备进行身份验证",
-    "You have to configure the same password on all devices": "您必须在所有设备上配置相同的密码"
+    "You have to configure the same password on all devices": "您必须在所有设备上配置相同的密码",
+    "credentialHelp": "无 = 使用下面的用户名和密码。否则使用 Admin 设置中“登录名和密码”形式的凭据（Admin 8 及更高版本）。",
+    "mqttClientCredentialsHelp": "在客户端模式下，用户名和密码用于登录外部代理（可选，取决于代理）。",
+    "mqttClientHostHelp": "外部代理的 IP 地址或主机名，例如 192.168.1.10（或类似 mqtts://broker.local:8883 的 URL）",
+    "mqttClientPortHelp": "默认：1883",
+    "mqttModeHelp": "启动内部 MQTT 代理或连接到现有的外部 MQTT 代理"
 }

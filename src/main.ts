@@ -3,15 +3,17 @@ import { EventEmitter } from 'node:events';
 import tcpPing from 'tcp-ping';
 
 import { Adapter, type AdapterOptions, I18n } from '@iobroker/adapter-core';
+import { subscribeCredentials } from '@iobroker/adapter-core/credentials';
 
 import { name as packageName } from '../package.json';
 import { BleDecoder } from './lib/ble-decoder';
 import { bleGatewayScriptVersion } from './lib/ble-gateway-script';
+import { applyCredentials, getSelectedCredentialIds } from './lib/credentials';
 import DeviceManagement from './lib/deviceManager';
 import ObjectHelper from './lib/objectHelper';
 import { CoAPServer } from './lib/protocol/coap';
 import type { BaseClient } from './lib/protocol/base';
-import { MQTTServer } from './lib/protocol/mqtt';
+import { MQTTServer, MQTTServerExternal } from './lib/protocol/mqtt';
 import type { ShellyAdapterConfig } from './lib/types';
 
 const adapterName = packageName.split('.').pop() ?? 'shelly';
@@ -23,9 +25,19 @@ const adapterName = packageName.split('.').pop() ?? 'shelly';
  */
 const bleReceivedByTtlMs = 60 * 60 * 1000;
 
+/**
+ * A BLE message with the same packet id as the last one is only treated as a duplicate (the same
+ * advertisement received by another gateway or repeated by the device) within this time. A device
+ * which restarts begins again with a low packet id, so a later message with the same id is new.
+ */
+const bleDuplicatePidWindowMs = 30 * 1000;
+
 export class ShellyAdapter extends Adapter {
     declare config: ShellyAdapterConfig;
     private serverMqtt: MQTTServer | null = null;
+    private serverMqttExternal: MQTTServerExternal | null = null;
+    /** Functions to stop watching the selected central credentials */
+    private credentialUnsubscribers: (() => Promise<void>)[] = [];
     private serverCoap: CoAPServer | null = null;
     private firmwareUpdateTimeout: ioBroker.Timeout | null | undefined = null;
     private onlineCheckTimeout: ioBroker.Timeout | null | undefined = null;
@@ -66,6 +78,10 @@ export class ShellyAdapter extends Adapter {
                 return;
             }
 
+            // Take user names and passwords from the central ioBroker credentials (if selected)
+            await applyCredentials(this);
+            await this.watchCredentials();
+
             this.eventEmitter.setMaxListeners(Infinity);
 
             await this.mkdirAsync(this.namespace, 'scripts');
@@ -85,19 +101,28 @@ export class ShellyAdapter extends Adapter {
                 if (protocol === 'both' || protocol === 'mqtt') {
                     this.validateQosConfig();
 
-                    this.log.info(
-                        `Starting in MQTT mode. Listening on ${this.config.bind}:${this.config.port} (QoS ${this.config.qos})`,
-                    );
+                    if (this.config.mqttMode === 'client') {
+                        this.log.info(
+                            `Starting in MQTT mode (external broker). Connecting to ${this.config.mqttClientHost}:${this.config.mqttClientPort || 1883} (QoS ${this.config.qos})`,
+                        );
 
-                    if (!this.config.mqttusername || this.config.mqttusername.length === 0) {
-                        this.log.error('MQTT Username is missing!');
-                    }
-                    if (!this.config.mqttpassword || this.config.mqttpassword.length === 0) {
-                        this.log.error('MQTT Password is missing!');
-                    }
+                        this.serverMqttExternal = new MQTTServerExternal(this, this.objectHelper, this.eventEmitter);
+                        this.serverMqttExternal.listen();
+                    } else {
+                        this.log.info(
+                            `Starting in MQTT mode. Listening on ${this.config.bind}:${this.config.port} (QoS ${this.config.qos})`,
+                        );
 
-                    this.serverMqtt = new MQTTServer(this, this.objectHelper, this.eventEmitter);
-                    this.serverMqtt.listen();
+                        if (!this.config.mqttusername || this.config.mqttusername.length === 0) {
+                            this.log.error('MQTT Username is missing!');
+                        }
+                        if (!this.config.mqttpassword || this.config.mqttpassword.length === 0) {
+                            this.log.error('MQTT Password is missing!');
+                        }
+
+                        this.serverMqtt = new MQTTServer(this, this.objectHelper, this.eventEmitter);
+                        this.serverMqtt.listen();
+                    }
                 }
             });
 
@@ -166,11 +191,40 @@ export class ShellyAdapter extends Adapter {
         this.config.qos = qos;
     }
 
-    private onObjectChange = (id: string, obj: ioBroker.Object | null | undefined): void =>
+    private onObjectChange = (id: string, obj: ioBroker.Object | null | undefined): void => {
+        // Foreign objects (e.g. the watched central credentials) are no devices
+        if (!id.startsWith(`${this.namespace}.`)) {
+            return;
+        }
+
         this.deviceManagement?.onObjectChange(
             id,
             obj as ioBroker.StateObject | ioBroker.ChannelObject | ioBroker.DeviceObject | null,
         );
+    };
+
+    /**
+     * Restart the instance when a selected central credential is changed or deleted, so the new
+     * user name / password is used for all connections.
+     */
+    private async watchCredentials(): Promise<void> {
+        for (const id of getSelectedCredentialIds(this.config)) {
+            try {
+                const unsubscribe = await subscribeCredentials(this, id, (changedId, credentials) => {
+                    if (this.isUnloaded) {
+                        return;
+                    }
+                    this.log.info(
+                        `[Credentials] Credential "${changedId}" was ${credentials ? 'changed' : 'deleted'} - restarting instance`,
+                    );
+                    this.restart();
+                });
+                this.credentialUnsubscribers.push(unsubscribe);
+            } catch (err) {
+                this.log.warn(`[Credentials] Cannot watch credential "${id}": ${err}`);
+            }
+        }
+    }
 
     private onStateChange = (id: string, state: ioBroker.State | null | undefined): void => {
         this.deviceManagement?.onStateChange(id, state ?? null);
@@ -260,6 +314,22 @@ export class ShellyAdapter extends Adapter {
                 }
             }
 
+            if (this.serverMqttExternal) {
+                try {
+                    this.log.debug(`[onUnload] Stopping external MQTT client`);
+                    this.serverMqttExternal.destroy();
+                } catch {
+                    // ignore
+                }
+            }
+
+            for (const unsubscribe of this.credentialUnsubscribers) {
+                await unsubscribe().catch(() => {
+                    // ignore
+                });
+            }
+            this.credentialUnsubscribers = [];
+
             callback();
         } catch {
             // this.log.error('Error');
@@ -284,6 +354,15 @@ export class ShellyAdapter extends Adapter {
         try {
             const deviceIds = await this.getAllDeviceIds();
             for (const deviceId of deviceIds) {
+                // Skip the TCP ping for devices with an active MQTT connection - they report their online
+                // state themselves (connect / disconnect / last will). A failed ping on port 80 must not
+                // override it: devices behind a Shelly range extender are often not reachable on port 80
+                // from ioBroker, but connected via MQTT. CoAP devices still need the ping to go offline.
+                if (this.isOnline(deviceId) && this.getClientByDeviceId(deviceId)) {
+                    this.log.silly(`[onlineCheck] Skipping ${deviceId} - connected via MQTT`);
+                    continue;
+                }
+
                 const stateHostName = await this.getStateAsync(`${deviceId}.hostname`);
                 const valHostname = stateHostName?.val;
 
@@ -372,7 +451,7 @@ export class ShellyAdapter extends Adapter {
         return Object.prototype.hasOwnProperty.call(this.onlineDevices, deviceId ?? '');
     }
 
-    private async getAllDeviceIds(): Promise<string[]> {
+    public async getAllDeviceIds(): Promise<string[]> {
         const devices = await this.getDevicesAsync();
         return devices.map(device => this.removeNamespace(device._id));
     }
@@ -609,6 +688,18 @@ export class ShellyAdapter extends Adapter {
                 native: {},
             });
 
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.lastRestart`, {
+                type: 'state',
+                common: {
+                    name: I18n.getTranslatedObject('Last restart'),
+                    type: 'number',
+                    role: 'value.time',
+                    read: true,
+                    write: false,
+                },
+                native: {},
+            });
+
             await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.encrypted`, {
                 type: 'state',
                 common: {
@@ -742,12 +833,33 @@ export class ShellyAdapter extends Adapter {
                     );
 
                     // Check if same message has been received by other Shellys
-                    if (pidOld !== pidNew) {
+                    const isDuplicate =
+                        pidOld === pidNew && !!pidState && Date.now() - pidState.ts < bleDuplicatePidWindowMs;
+                    if (!isDuplicate) {
                         await this.setState(`ble.${valTyped.srcBle.mac}.pid`, {
                             val: pidNew,
                             ack: true,
                             c: valTyped.src,
                         });
+
+                        // A restarting device sends its device information and begins again with a low
+                        // packet id. A wrap-around of the 8-bit packet id (e.g. 255 -> 0) is no restart.
+                        if (
+                            typeof pidOld === 'number' &&
+                            typeof pidNew === 'number' &&
+                            pidNew < pidOld &&
+                            pidOld - pidNew < 128 &&
+                            (unpackedData.device_type !== undefined || unpackedData.firmware_version !== undefined)
+                        ) {
+                            this.log.warn(
+                                `[BLE] ${valTyped.srcBle.mac} has restarted (packet id ${pidOld} -> ${pidNew}). Frequent restarts usually indicate a weak battery`,
+                            );
+                            await this.setState(`ble.${valTyped.srcBle.mac}.lastRestart`, {
+                                val: Date.now(),
+                                ack: true,
+                                c: valTyped.src,
+                            });
+                        }
 
                         for (const [key, value] of Object.entries(unpackedData)) {
                             const typeListKey = key.includes('button_') ? 'button' : key;
@@ -854,7 +966,7 @@ export class ShellyAdapter extends Adapter {
      * @param deviceId ioBroker device id, e.g. `SNSN-0013A#a1b2c3#1`
      */
     public getClientByDeviceId(deviceId: string): BaseClient | undefined {
-        return this.serverMqtt?.getClientByDeviceId(deviceId);
+        return this.serverMqtt?.getClientByDeviceId(deviceId) ?? this.serverMqttExternal?.getClientByDeviceId(deviceId);
     }
 
     private removeNamespace(id: string): string {

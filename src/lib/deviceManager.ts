@@ -24,6 +24,7 @@ import * as path from 'node:path';
 import * as datapoints from './datapoints';
 import type { ShellyAdapter } from '../main';
 import { bleGatewayScriptVersion } from './ble-gateway-script';
+import { getBrokerUrl } from './protocol/mqtt-topics';
 import type { ShellyAdapterConfig } from './types';
 
 /**
@@ -2284,19 +2285,29 @@ export default class ShellyDeviceManagement extends DeviceManagement<ShellyAdapt
         devices: { name: string; ip: string; customName: string }[],
         context: ActionContext,
     ): Promise<void> {
-        const mqttPort = this.config.port || 1882;
         const mqttUser = this.config.mqttusername || '';
         const mqttPass = this.config.mqttpassword || '';
         const httpPass = this.config.httppassword || '';
-        const localIp = this.getLocalIp(devices[0].ip);
         const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-        if (!localIp) {
-            await context.showMessage(I18n.getTranslatedObject('Could not determine local IP address'));
-            return;
+        let mqttServer: string;
+        if (this.config.mqttMode === 'client') {
+            // The devices have to connect to the external broker
+            const brokerServer = this.getExternalBrokerServer();
+            if (!brokerServer) {
+                await context.showMessage(I18n.getTranslatedObject('External MQTT broker host is not configured'));
+                return;
+            }
+            mqttServer = brokerServer;
+        } else {
+            const mqttPort = this.config.port || 1882;
+            const localIp = this.getLocalIp(devices[0].ip);
+            if (!localIp) {
+                await context.showMessage(I18n.getTranslatedObject('Could not determine local IP address'));
+                return;
+            }
+            mqttServer = `${localIp}:${mqttPort}`;
         }
-
-        const mqttServer = `${localIp}:${mqttPort}`;
 
         // Collect existing device IDs to detect MQTT ID conflicts
         const usedMqttIds = new Set<string>();
@@ -2635,6 +2646,18 @@ export default class ShellyDeviceManagement extends DeviceManagement<ShellyAdapt
 
         this.adapter.log.info(`[DeviceManager] ${ip}: Provisioning complete (restart_required=${restartRequired})`);
         return restartRequired;
+    }
+
+    /**
+     * `host:port` of the external MQTT broker, as it has to be configured on the devices
+     */
+    private getExternalBrokerServer(): string | undefined {
+        try {
+            const brokerUrl = getBrokerUrl(this.config.mqttClientHost, this.config.mqttClientPort);
+            return brokerUrl ? new URL(brokerUrl).host : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     private getLocalIp(targetIp: string): string | undefined {

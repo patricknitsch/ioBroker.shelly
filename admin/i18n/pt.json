@@ -7,6 +7,7 @@
     "CoAP and HTTP": "CoAP e HTTP",
     "CoAP ist supported by Gen1 devices, MQTT is supported by all devices (Gen1 and Gen2)": "CoAP é suportado por dispositivos Gen1, MQTT é suportado por todos os dispositivos (Gen1 e Gen2)",
     "CoAP settings": "Configurações CoAP",
+    "Credential (Admin settings)": "Credencial (definições do Admin)",
     "Custom options": "Opções personalizadas",
     "Debugging (expert options)": "Depuração (opções avançadas)",
     "Default QoS": "QoS padrão",
@@ -26,6 +27,12 @@
     "MQTT Server options": "Opções do servidor MQTT",
     "MQTT Username": "Nome de Usuário MQTT",
     "MQTT and HTTP": "MQTT e HTTP",
+    "MQTT broker (internal)": "Broker MQTT (interno)",
+    "MQTT broker host": "Host do broker MQTT",
+    "MQTT broker options": "Opções do broker MQTT",
+    "MQTT broker port": "Porta do broker MQTT",
+    "MQTT client (external broker)": "Cliente MQTT (broker externo)",
+    "MQTT mode": "Modo MQTT",
     "MQTT settings": "Configurações MQTT",
     "Must be configured on all Shelly devices": "Deve ser configurado em todos os dispositivos Shelly",
     "Periodically scan network for new Shelly devices via mDNS": "Verifique periodicamente a rede em busca de novos dispositivos Shelly via mDNS",
@@ -38,5 +45,10 @@
     "Update objects even if there is no value change": "Atualizar objetos mesmo se não houver alteração de valor",
     "User credentials for restricted login": "Credenciais de usuário para login restrito",
     "Will be used to authenticate against generation 1 devices": "Será usado para autenticação em dispositivos da geração 1",
-    "You have to configure the same password on all devices": "Você precisa configurar a mesma senha em todos os dispositivos"
+    "You have to configure the same password on all devices": "Você precisa configurar a mesma senha em todos os dispositivos",
+    "credentialHelp": "Nenhum = usar o nome de utilizador e a palavra-passe abaixo. Caso contrário, uma credencial do tipo \"Login e palavra-passe\" das definições do Admin (Admin 8 e superior).",
+    "mqttClientCredentialsHelp": "No modo cliente, o nome de utilizador e a palavra-passe são usados para iniciar sessão no broker externo (opcional, depende do broker).",
+    "mqttClientHostHelp": "Endereço IP ou nome do host do broker externo, por ex. 192.168.1.10 (ou um URL como mqtts://broker.local:8883)",
+    "mqttClientPortHelp": "Padrão: 1883",
+    "mqttModeHelp": "Iniciar o broker MQTT interno ou ligar a um broker MQTT externo existente"
 }
