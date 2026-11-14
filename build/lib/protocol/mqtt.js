@@ -650,11 +650,14 @@ class MQTTClient extends base_1.BaseClient {
                     // check for existing instances
                     MQTTClient._registerRun(this);
                     const ip = this.stream?.remoteAddress ?? null;
-                    this.adapter.log.info(`[MQTT] Device with client id "${packet.clientId}" connected from ${ip}!`);
+                    this.adapter.log.info(`[MQTT] Device with client id "${packet.clientId}" connected from ${ip}`);
                     this.initializing = true;
                     // Device Mode information (init)
                     this.adapter.log.silly(`[MQTT] Client id "${packet.clientId}" init device mode`);
                     await this.initDeviceModeFromState();
+                    // Firmware version information (init)
+                    this.adapter.log.silly(`[MQTT] Client id "${packet.clientId}" init firmware version`);
+                    await this.initDeviceFirmwareVersionFromState();
                     // accept connection
                     this.adapter.log.silly(`[MQTT] Client id "${packet.clientId}" accepting connection`);
                     try {

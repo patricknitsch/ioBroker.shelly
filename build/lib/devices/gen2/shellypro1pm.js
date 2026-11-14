@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.shellypro1pm = void 0;
 const shellyHelperGen2 = __importStar(require("../gen2-helper"));
+const shellyHotfixesGen2 = __importStar(require("../gen2-hotfixes"));
 /**
  * Shelly Pro 1 PM / shellypro1pm
  *
@@ -43,6 +44,9 @@ const shellyHelperGen2 = __importStar(require("../gen2-helper"));
 const shellypro1pm = {};
 exports.shellypro1pm = shellypro1pm;
 shellyHelperGen2.addSwitch(shellypro1pm, 0, true);
+// Firmware bug: the switch output is reported outdated on the status topic
+// right after a change (see issue #1694). Derive it from the NotifyStatus message instead.
+shellyHotfixesGen2.fixMqttOutdatedSwitchStatus(shellypro1pm, 0);
 shellyHelperGen2.addInput(shellypro1pm, 0);
 shellyHelperGen2.addInput(shellypro1pm, 1);
 //# sourceMappingURL=shellypro1pm.js.map

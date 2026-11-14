@@ -211,6 +211,8 @@ class CoAPClient extends base_1.BaseClient {
             this.adapter.log.debug(`[CoAP] 2. Shelly device info for ${this.getDeviceId()}: ${JSON.stringify(payload)}`);
             // Device Mode information (init)
             await this.initDeviceModeFromState();
+            // Firmware version information (init)
+            await this.initDeviceFirmwareVersionFromState();
             await this.deleteOldStates();
             await this.createObjects();
             this.adapter
@@ -223,7 +225,7 @@ class CoAPClient extends base_1.BaseClient {
             this.listener();
         }
         else {
-            this.adapter.log.error(`[CoAP] Device unknown, configuration for Shelly device ${this.getLogInfo()} does not exist!`);
+            this.adapter.log.error(`[CoAP] Device unknown, configuration for Shelly device ${this.getLogInfo()} does not exist`);
             this.adapter.log.error(`[CoAP] 1. Send developer following info for ${this.getDeviceId()}: ${JSON.stringify(description)}`);
             this.adapter.log.error(`[CoAP] 2. Send developer following info for ${this.getDeviceId()}: ${JSON.stringify(payload)}`);
         }

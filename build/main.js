@@ -24,6 +24,12 @@ const adapterName = package_json_1.name.split('.').pop() ?? 'shelly';
  * weak reception would disappear from the list between two messages.
  */
 const bleReceivedByTtlMs = 60 * 60 * 1000;
+/**
+ * A BLE message with the same packet id as the last one is only treated as a duplicate (the same
+ * advertisement received by another gateway or repeated by the device) within this time. A device
+ * which restarts begins again with a low packet id, so a later message with the same id is new.
+ */
+const bleDuplicatePidWindowMs = 30 * 1000;
 class ShellyAdapter extends adapter_core_1.Adapter {
     serverMqtt = null;
     serverMqttExternal = null;
@@ -548,6 +554,17 @@ class ShellyAdapter extends adapter_core_1.Adapter {
                 },
                 native: {},
             });
+            await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.lastRestart`, {
+                type: 'state',
+                common: {
+                    name: adapter_core_1.I18n.getTranslatedObject('Last restart'),
+                    type: 'number',
+                    role: 'value.time',
+                    read: true,
+                    write: false,
+                },
+                native: {},
+            });
             await this.setObjectNotExistsAsync(`ble.${valTyped.srcBle.mac}.encrypted`, {
                 type: 'state',
                 common: {
@@ -651,12 +668,27 @@ class ShellyAdapter extends adapter_core_1.Adapter {
                     // which currently receive this device and not only the receivers of one packet.
                     await this.updateBleReceivedBy(valTyped.srcBle.mac, valTyped.src, valTyped.srcBle.rssi, valTyped.scriptVersion);
                     // Check if same message has been received by other Shellys
-                    if (pidOld !== pidNew) {
+                    const isDuplicate = pidOld === pidNew && !!pidState && Date.now() - pidState.ts < bleDuplicatePidWindowMs;
+                    if (!isDuplicate) {
                         await this.setState(`ble.${valTyped.srcBle.mac}.pid`, {
                             val: pidNew,
                             ack: true,
                             c: valTyped.src,
                         });
+                        // A restarting device sends its device information and begins again with a low
+                        // packet id. A wrap-around of the 8-bit packet id (e.g. 255 -> 0) is no restart.
+                        if (typeof pidOld === 'number' &&
+                            typeof pidNew === 'number' &&
+                            pidNew < pidOld &&
+                            pidOld - pidNew < 128 &&
+                            (unpackedData.device_type !== undefined || unpackedData.firmware_version !== undefined)) {
+                            this.log.warn(`[BLE] ${valTyped.srcBle.mac} has restarted (packet id ${pidOld} -> ${pidNew}). Frequent restarts usually indicate a weak battery`);
+                            await this.setState(`ble.${valTyped.srcBle.mac}.lastRestart`, {
+                                val: Date.now(),
+                                ack: true,
+                                c: valTyped.src,
+                            });
+                        }
                         for (const [key, value] of Object.entries(unpackedData)) {
                             const typeListKey = key.includes('button_') ? 'button' : key;
                             if (Object.keys(typesList).includes(typeListKey)) {

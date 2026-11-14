@@ -78,5 +78,6 @@ shellyHelperGen2.addEM1(shellypro3em, 2, false);
 shellyHelperGen2.addEM1Data(shellypro3em, 0);
 shellyHelperGen2.addEM1Data(shellypro3em, 1);
 shellyHelperGen2.addEM1Data(shellypro3em, 2);
+shellyHelperGen2.addEMTemperatureSensor(shellypro3em);
 shellyHelperGen2.addProOutputAddon(shellypro3em);
 //# sourceMappingURL=shellypro3em.js.map

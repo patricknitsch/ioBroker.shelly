@@ -373,6 +373,15 @@ class BaseClient {
             }
         }
     }
+    async initDeviceFirmwareVersionFromState() {
+        if (!this.deviceFirmwareVersion) {
+            const versionState = await this.adapter.getStateAsync(`${this.getDeviceId()}.versionShort`);
+            if (versionState?.val) {
+                this.deviceFirmwareVersion = versionState.val;
+                this.adapter.log.debug(`Configured firmware version of ${this.getLogInfo()} by state "${this.getDeviceId()}.versionShort" (fallback): ${this.deviceFirmwareVersion}`);
+            }
+        }
+    }
     /**
      * Parse a semver string from a Shelly firmware version string.
      * Input example: "20250924-062655/1.7.1-gd336f31" or "1.7.1-gd336f31"

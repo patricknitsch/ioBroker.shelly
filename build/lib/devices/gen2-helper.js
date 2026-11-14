@@ -49,9 +49,9 @@ exports.addHumiditySensor = addHumiditySensor;
 exports.addIlluminanceSensor = addIlluminanceSensor;
 exports.addInput = addInput;
 exports.addLight = addLight;
-exports.addPlusAddon = addPlusAddon;
 exports.addPlugpmUI = addPlugpmUI;
 exports.addPlugsUI = addPlugsUI;
+exports.addPlusAddon = addPlusAddon;
 exports.addPM1 = addPM1;
 exports.addPresence = addPresence;
 exports.addPresenceZone = addPresenceZone;
@@ -3629,6 +3629,10 @@ function addEMData(deviceObj, emId, phases) {
  * https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Temperature
  *
  * @param deviceObj
+ */
+/* NOTE:
+ * This sensor is identical to addTemperatureSensor. It exists due to historical reasons only.
+ * correct implementation would be addTemepraturSensor(xxx, 0) as this what the sensor reads
  */
 function addEMTemperatureSensor(deviceObj) {
     deviceObj[`EMTemperature.tC`] = {
