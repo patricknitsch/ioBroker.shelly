@@ -307,6 +307,36 @@ class MQTTClient extends BaseClient {
                     }
                 }
 
+                // The system configuration was changed (e.g. the device name) - read the device information again via
+                // MQTT, the HTTP polling does not reach devices behind a range extender
+                if (packet.topic === `${this.getMqttPrefix()}/events/rpc`) {
+                    try {
+                        const payloadObj = JSON.parse(packet.payload.toString());
+                        const sysChanged =
+                            payloadObj?.method === 'NotifyEvent' &&
+                            Array.isArray(payloadObj?.params?.events) &&
+                            payloadObj.params.events.some(
+                                (e: { component?: string; event?: string }) =>
+                                    e?.component === 'sys' && e?.event === 'config_changed',
+                            );
+                        if (sysChanged) {
+                            this.publishStateValue(
+                                '<mqttprefix>/rpc',
+                                JSON.stringify({
+                                    id: this.getNextMsgId(),
+                                    src: INIT_SRC,
+                                    method: 'Shelly.GetDeviceInfo',
+                                    params: { ident: true },
+                                }),
+                            );
+                        }
+                    } catch (err) {
+                        this.adapter.log.debug(
+                            `[MQTT] Error parsing event: ${this.getLogInfo()} - topic: ${packet.topic}, error: ${err}`,
+                        );
+                    }
+                }
+
                 // Update IP address from the status notifications (e.g. after an IP change behind a range extender)
                 if (
                     packet.topic === `${this.getMqttPrefix()}/status/wifi` ||
@@ -1256,6 +1286,10 @@ class ExternalMQTTDeviceClient extends MQTTClient {
     brokerOnline: boolean | undefined;
     /** The HTTP polling (httpIoBrokerState) is running */
     private httpPolling = false;
+    /** Waits for the first answer to an RPC request, to warn if the device does not answer via MQTT */
+    private rpcAnswerTimeout: NodeJS.Timeout | undefined;
+    /** The device answered an RPC request via MQTT */
+    private rpcAnswered = false;
 
     constructor(
         adapter: ShellyAdapter,
@@ -1421,6 +1455,8 @@ class ExternalMQTTDeviceClient extends MQTTClient {
      */
     requestStatus(withDeviceInfo = false): void {
         if (this.getDeviceGen() >= 2) {
+            this.watchRpcAnswer();
+
             if (withDeviceInfo) {
                 this.publishStateValue(
                     '<mqttprefix>/rpc',
@@ -1449,6 +1485,36 @@ class ExternalMQTTDeviceClient extends MQTTClient {
     }
 
     /**
+     * Warns once if the device does not answer RPC requests via MQTT - without the answers, e.g. the
+     * device name, firmware version and model are only available via HTTP
+     */
+    private watchRpcAnswer(): void {
+        if (this.rpcAnswered || this.rpcAnswerTimeout) {
+            return;
+        }
+
+        this.rpcAnswerTimeout = setTimeout(() => {
+            this.rpcAnswerTimeout = undefined;
+            if (!this.rpcAnswered && !this.destroying && this.isOnline()) {
+                this.adapter.log.warn(
+                    `[MQTT External] ${this.getLogInfo()} does not answer RPC requests via MQTT. Please enable "RPC over MQTT" in the MQTT settings of the device and check that the broker allows the device to publish to "${INIT_SRC}/rpc" and "${CMD_SRC}/rpc"`,
+                );
+            }
+        }, 60 * 1000);
+    }
+
+    /**
+     * Called for every RPC answer of the device
+     */
+    onRpcAnswer(): void {
+        this.rpcAnswered = true;
+        if (this.rpcAnswerTimeout) {
+            clearTimeout(this.rpcAnswerTimeout);
+            this.rpcAnswerTimeout = undefined;
+        }
+    }
+
+    /**
      * Handle an incoming message of this device (queued while the device is initializing)
      *
      * @param topic - MQTT topic
@@ -1469,6 +1535,10 @@ class ExternalMQTTDeviceClient extends MQTTClient {
     async destroy(): Promise<void> {
         this.initialized = false;
         this.httpPolling = false;
+        if (this.rpcAnswerTimeout) {
+            clearTimeout(this.rpcAnswerTimeout);
+            this.rpcAnswerTimeout = undefined;
+        }
         await super.destroy();
     }
 }
@@ -1765,6 +1835,7 @@ export class MQTTServerExternal extends BaseServer {
             return;
         }
 
+        client.onRpcAnswer();
         await client.handleMessage(topic, payload);
         client.startHttpPolling(); // the response might contain the IP address
     }
