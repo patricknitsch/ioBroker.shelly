@@ -57,6 +57,7 @@ exports.getSetDuration = getSetDuration;
 exports.getFavoritePosition = getFavoritePosition;
 exports.getRGBW = getRGBW;
 exports.getState = getState;
+exports.updateWifiApClients = updateWifiApClients;
 const colorconv = __importStar(require("./colorconv"));
 /** Base64-encoded SVG icons (Font Awesome) used for generated states in the admin UI. */
 const icons = {
@@ -446,5 +447,84 @@ async function getState(self, id) {
     const node = `${self.getDeviceId()}.${id}`;
     const state = await self.adapter.getStateAsync(node);
     return state ? state.val : undefined;
+}
+/**
+ * Creates/updates dynamic apClients.{mac}.* states from a WiFi.ListAPClients response.
+ * Returns the number of currently connected clients (used as the WiFi.apClientCount state value).
+ *
+ * @param self - the live ShellyClient
+ * @param value - raw JSON response body from /rpc/WiFi.ListAPClients
+ */
+async function updateWifiApClients(self, value) {
+    const deviceId = self.getDeviceId();
+    if (!deviceId || !value) {
+        return undefined;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(value);
+    }
+    catch {
+        return undefined;
+    }
+    const clients = parsed.ap_clients ?? [];
+    const currentMacs = new Set();
+    // Ensure apClients channel exists
+    await self.adapter.setObjectNotExistsAsync(`${deviceId}.apClients`, {
+        type: 'channel',
+        common: { name: 'AP clients' },
+        native: {},
+    });
+    for (const client of clients) {
+        const mac = client.mac.replace(/[^a-f0-9]/gi, '').toLowerCase();
+        currentMacs.add(mac);
+        const channelId = `${deviceId}.apClients.${mac}`;
+        await self.adapter.setObjectNotExistsAsync(channelId, {
+            type: 'channel',
+            common: { name: `AP client ${mac}` },
+            native: {},
+        });
+        const stateDefs = [
+            ['ip', { name: 'IP address', type: 'string', role: 'info.ip', read: true, write: false }, client.ip ?? ''],
+            [
+                'ipStatic',
+                { name: 'Static IP', type: 'boolean', role: 'state', read: true, write: false },
+                client.ip_static,
+            ],
+            ['mport', { name: 'Mapped port', type: 'number', role: 'value', read: true, write: false }, client.mport],
+            [
+                'since',
+                { name: 'Connected since', type: 'number', role: 'date', unit: 'sec', read: true, write: false },
+                client.since,
+            ],
+            [
+                'connected',
+                { name: 'Connected', type: 'boolean', role: 'indicator.connected', read: true, write: false },
+                true,
+            ],
+        ];
+        for (const [key, common, val] of stateDefs) {
+            const stateId = `${channelId}.${key}`;
+            await self.adapter.setObjectNotExistsAsync(stateId, {
+                type: 'state',
+                common,
+                native: {},
+            });
+            await self.adapter.setStateAsync(stateId, { val, ack: true });
+        }
+    }
+    // Mark clients no longer present as disconnected
+    const allObjs = await self.adapter.getAdapterObjectsAsync();
+    const prefix = `${self.adapter.namespace}.${deviceId}.apClients.`;
+    for (const fullId in allObjs) {
+        const obj = allObjs[fullId];
+        if (obj?.type === 'channel' && fullId.startsWith(prefix)) {
+            const mac = fullId.slice(prefix.length);
+            if (!mac.includes('.') && !currentMacs.has(mac)) {
+                await self.adapter.setStateAsync(`${deviceId}.apClients.${mac}.connected`, { val: false, ack: true });
+            }
+        }
+    }
+    return clients.length;
 }
 //# sourceMappingURL=shelly-helper.js.map
