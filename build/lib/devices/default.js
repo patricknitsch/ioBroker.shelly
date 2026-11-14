@@ -841,6 +841,13 @@ const defaultsgen2 = {
     },
     name: {
         mqtt: {
+            // Response of Shelly.GetDeviceInfo requested via MQTT - also works if the device is not reachable via HTTP (e.g. behind a range extender)
+            mqtt_publish: 'iobroker-init/rpc',
+            mqtt_publish_funct: async (value, self) => {
+                const result = value ? JSON.parse(value)?.result : undefined;
+                // Only the response of Shelly.GetDeviceInfo (contains fw_id) carries the device name
+                return result?.fw_id && result.name ? await shellyHelper.setDeviceName(self, result.name) : undefined;
+            },
             http_publish: '/rpc/Shelly.GetDeviceInfo',
             http_publish_funct: async (value, self) => value ? await shellyHelper.setDeviceName(self, JSON.parse(value).name) : undefined,
             mqtt_cmd: '<mqttprefix>/rpc',
